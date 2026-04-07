@@ -98,6 +98,14 @@ Rules:
 - Use ISO 8601 duration format for times (PT15M = 15 minutes, PT1H30M = 1 hour 30 minutes).
 - If a value is not mentioned, use null (not empty string, not 0).
 - Parse ingredients carefully: separate quantity, unit, food name, and any preparation notes.
+- Ingredient field rules:
+  - originalText must be the full natural ingredient line.
+  - quantity must contain only the numeric amount.
+  - unit.name must contain only the measurement unit.
+  - food.name must contain only the ingredient name, never quantity or unit text.
+  - note should contain only preparation details, optional qualifiers, or parenthetical text.
+  - Do not duplicate quantity or unit inside food, note, or originalText beyond the normal ingredient line.
+  - If the structure is uncertain, preserve a clean originalText and use null for uncertain structured fields instead of guessing.
 - Keep instruction steps atomic — one action per step.
 - Choose appropriate categories (e.g. "Dinner", "Breakfast", "Dessert", "Soup") and tags (e.g. "Italian", "Vegetarian", "Quick", "Gluten-Free").
 - If nutrition info is not mentioned, omit the nutrition field entirely.

@@ -8,7 +8,7 @@ import {
 } from "../lib/ytdlp.js";
 import { transcribeAudio } from "../lib/transcribe.js";
 import { parseRecipeFromTranscript } from "../lib/llm.js";
-import { importRecipe } from "../lib/mealie.js";
+import { importRecipe, prepareRecipeImport } from "../lib/mealie.js";
 
 // -------------------------------------------------------------------------
 // SSE event types (shared with frontend)
@@ -40,6 +40,44 @@ export function isJobRunning(): boolean {
 // -------------------------------------------------------------------------
 
 export const parseRouter = new Hono();
+
+function hasEnoughRecipeContext(description: string): { ok: boolean; reason?: string } {
+  const trimmed = description.trim();
+  if (trimmed.length < 160) {
+    return {
+      ok: false,
+      reason:
+        "Transcript extraction is disabled and the video description does not contain enough recipe detail to build a reliable recipe. Enable transcript extraction and try again.",
+    };
+  }
+
+  const quantityMatches = trimmed.match(/(?:\d+(?:[.,]\d+)?|\d+\/\d+|[¼½¾⅓⅔⅛⅜⅝⅞])\s?(?:g|kg|mg|ml|l|tbsp|tsp|cup|cups|oz|lb|бр\.?|ч\.л\.?|с\.л\.?|гр\.?|кг|мл|л)\b/giu) ?? [];
+  const recipeSignals = [
+    /ingredients?/i,
+    /instructions?/i,
+    /directions?/i,
+    /method/i,
+    /recipe/i,
+    /съставки/i,
+    /продукти/i,
+    /начин на приготвяне/i,
+    /приготвяне/i,
+    /разбърка/i,
+    /добави/i,
+    /печ[еи]/i,
+  ].filter((pattern) => pattern.test(trimmed));
+  const nonEmptyLines = trimmed.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+
+  if (quantityMatches.length >= 2 && (recipeSignals.length >= 1 || nonEmptyLines.length >= 4)) {
+    return { ok: true };
+  }
+
+  return {
+    ok: false,
+    reason:
+      "Transcript extraction is disabled and the available description looks too thin for a reliable parse. Enable transcript extraction and try again.",
+  };
+}
 
 parseRouter.get("/api/thumbnail", async (c) => {
   const thumbnailUrl = c.req.query("url");
@@ -78,6 +116,7 @@ parseRouter.get("/api/thumbnail", async (c) => {
 parseRouter.get("/api/parse", async (c) => {
   const url = c.req.query("url");
   const translate = c.req.query("translate") === "true";
+  const extractTranscript = c.req.query("extractTranscript") !== "false";
 
   if (!url) {
     return c.json({ error: "Missing required query parameter: url" }, 400);
@@ -92,6 +131,7 @@ parseRouter.get("/api/parse", async (c) => {
 
   return streamSSE(c, async (stream) => {
     jobRunning = true;
+    let currentStep: StepName = "metadata";
 
     // Cleanup handles for temp files
     let audioCleanup: (() => Promise<void>) | null = null;
@@ -108,6 +148,7 @@ parseRouter.get("/api/parse", async (c) => {
       // ----------------------------------------------------------------
       // Step 1: Fetch metadata
       // ----------------------------------------------------------------
+      currentStep = "metadata";
       await emit({ step: "metadata", status: "loading", message: "Fetching video info..." });
 
       const metadata = await fetchMetadata(url);
@@ -135,10 +176,27 @@ parseRouter.get("/api/parse", async (c) => {
       // ----------------------------------------------------------------
       // Step 2: Get transcript
       // ----------------------------------------------------------------
-      let transcript: string;
-      let transcriptSource: "subtitles" | "audio";
+      let transcript = "";
+      let transcriptSource: "subtitles" | "audio" | null = null;
 
-      if (metadata.hasSubtitles) {
+      if (!extractTranscript) {
+        await emit({
+          step: "transcript",
+          status: "done",
+          message: "Skipped.",
+        });
+
+        const contextCheck = hasEnoughRecipeContext(metadata.description);
+        if (!contextCheck.ok) {
+          await emit({
+            step: "parsing",
+            status: "error",
+            error: contextCheck.reason,
+          });
+          return;
+        }
+      } else if (metadata.hasSubtitles) {
+        currentStep = "transcript";
         await emit({
           step: "transcript",
           status: "loading",
@@ -193,6 +251,7 @@ parseRouter.get("/api/parse", async (c) => {
           });
         }
       } else {
+        currentStep = "transcript";
         await emit({
           step: "transcript",
           status: "loading",
@@ -232,6 +291,7 @@ parseRouter.get("/api/parse", async (c) => {
       // ----------------------------------------------------------------
       // Step 3: Parse recipe with LLM
       // ----------------------------------------------------------------
+      currentStep = "parsing";
       await emit({
         step: "parsing",
         status: "loading",
@@ -244,6 +304,7 @@ parseRouter.get("/api/parse", async (c) => {
         transcript,
         translate,
       });
+      const preparedImport = await prepareRecipeImport(recipe, url);
 
       console.log(`[parse] Recipe parsed: "${recipe.name}" with ${recipe.recipeIngredient.length} ingredients`);
 
@@ -251,11 +312,17 @@ parseRouter.get("/api/parse", async (c) => {
         step: "parsing",
         status: "done",
         message: `Recipe parsed: ${recipe.name}`,
+        data: {
+          parsedRecipe: recipe,
+          importPayload: preparedImport.payload,
+          ingredientWarnings: preparedImport.ingredientWarnings,
+        },
       });
 
       // ----------------------------------------------------------------
       // Step 4: Import to Mealie
       // ----------------------------------------------------------------
+      currentStep = "importing";
       await emit({
         step: "importing",
         status: "loading",
@@ -275,8 +342,7 @@ parseRouter.get("/api/parse", async (c) => {
       }
 
       const result = await importRecipe({
-        recipe,
-        originalUrl: url,
+        preparedImport,
         thumbnailFilePath,
       });
 
@@ -299,7 +365,7 @@ parseRouter.get("/api/parse", async (c) => {
       // The last emitted loading step is the one that failed
       // We emit a generic error since we don't track current step here
       await emit({
-        step: "importing", // will be overridden client-side by tracking current step
+        step: currentStep,
         status: "error",
         error: message,
       }).catch(() => {});

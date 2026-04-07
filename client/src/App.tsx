@@ -24,6 +24,9 @@ interface SSEEvent {
     hasSubtitles?: boolean;
     transcript?: string;
     source?: "subtitles" | "audio";
+    parsedRecipe?: unknown;
+    importPayload?: unknown;
+    ingredientWarnings?: string[];
     recipeUrl?: string;
     slug?: string;
   };
@@ -49,6 +52,12 @@ interface TranscriptDetails {
   source: "subtitles" | "audio";
 }
 
+interface ParsingDetails {
+  parsedRecipe: unknown;
+  importPayload: unknown;
+  ingredientWarnings: string[];
+}
+
 const STEPS: { id: StepName; label: string }[] = [
   { id: "metadata", label: "Fetching video info" },
   { id: "transcript", label: "Extracting transcript" },
@@ -70,6 +79,7 @@ const DEFAULT_STEPS: Record<StepName, StepState> = {
 export default function App() {
   const [url, setUrl] = useState("");
   const [translate, setTranslate] = useState(false);
+  const [extractTranscript, setExtractTranscript] = useState(true);
   const [phase, setPhase] = useState<"input" | "loading" | "done" | "error">("input");
   const [steps, setSteps] = useState<Record<StepName, StepState>>(DEFAULT_STEPS);
   const [recipeTitle, setRecipeTitle] = useState<string | null>(null);
@@ -78,6 +88,7 @@ export default function App() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [metadataDetails, setMetadataDetails] = useState<MetadataDetails | null>(null);
   const [transcriptDetails, setTranscriptDetails] = useState<TranscriptDetails | null>(null);
+  const [parsingDetails, setParsingDetails] = useState<ParsingDetails | null>(null);
   const [expandedDetails, setExpandedDetails] = useState<Partial<Record<StepName, boolean>>>({});
 
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -99,6 +110,7 @@ export default function App() {
     setErrorMessage(null);
     setMetadataDetails(null);
     setTranscriptDetails(null);
+    setParsingDetails(null);
     setExpandedDetails({});
   };
 
@@ -120,7 +132,9 @@ export default function App() {
     setPhase("loading");
 
     const encodedUrl = encodeURIComponent(videoUrl);
-    const es = new EventSource(`/api/parse?url=${encodedUrl}&translate=${translate}`);
+    const es = new EventSource(
+      `/api/parse?url=${encodedUrl}&translate=${translate}&extractTranscript=${extractTranscript}`
+    );
     eventSourceRef.current = es;
 
     es.addEventListener("message", (event: MessageEvent) => {
@@ -161,20 +175,28 @@ export default function App() {
           });
         }
 
+        if (
+          msg.step === "parsing" &&
+          msg.data?.parsedRecipe !== undefined &&
+          msg.data?.importPayload !== undefined
+        ) {
+          setParsingDetails({
+            parsedRecipe: msg.data.parsedRecipe,
+            importPayload: msg.data.importPayload,
+            ingredientWarnings: Array.isArray(msg.data.ingredientWarnings)
+              ? msg.data.ingredientWarnings.filter((warning): warning is string => typeof warning === "string")
+              : [],
+          });
+        }
+
         // Final step done
         if (msg.step === "importing" && msg.data?.recipeUrl) {
           setRecipeUrl(msg.data.recipeUrl);
           setPhase("done");
           es.close();
-
-          // Auto-redirect after a short pause so the user can see the success state
-          setTimeout(() => {
-            window.location.href = msg.data!.recipeUrl!;
-          }, 2500);
         }
       } else if (msg.status === "error") {
-        // Mark the step that was active when the error occurred
-        const failedStep = currentStepRef.current;
+        const failedStep = msg.step ?? currentStepRef.current;
         updateStep(failedStep, {
           status: "error",
           message: msg.error ?? "An unexpected error occurred.",
@@ -186,6 +208,10 @@ export default function App() {
     });
 
     es.onerror = () => {
+      updateStep(currentStepRef.current, {
+        status: "error",
+        message: "Connection to server lost. Please try again.",
+      });
       setErrorMessage("Connection to server lost. Please try again.");
       setPhase("error");
       es.close();
@@ -240,6 +266,15 @@ export default function App() {
             />
             <span>Translate recipe to English</span>
           </label>
+          <label className={styles.toggle}>
+            <input
+              type="checkbox"
+              checked={extractTranscript}
+              onChange={(e) => setExtractTranscript(e.target.checked)}
+              disabled={isLoading}
+            />
+            <span>Extract video transcript</span>
+          </label>
         </form>
 
         {(phase === "loading" || phase === "done" || phase === "error") && (
@@ -266,7 +301,8 @@ export default function App() {
                 const state = steps[step.id];
                 const hasDetails =
                   (step.id === "metadata" && Boolean(metadataDetails)) ||
-                  (step.id === "transcript" && Boolean(transcriptDetails));
+                  (step.id === "transcript" && Boolean(transcriptDetails)) ||
+                  (step.id === "parsing" && Boolean(parsingDetails));
                 const detailsOpen = Boolean(expandedDetails[step.id]);
                 return (
                   <li
@@ -333,6 +369,32 @@ export default function App() {
                           />
                         </div>
                       )}
+                      {step.id === "parsing" && detailsOpen && parsingDetails && (
+                        <div className={styles.detailsPanel}>
+                          {parsingDetails.ingredientWarnings.length > 0 && (
+                            <div className={styles.warningBlock}>
+                              <p><strong>Ingredient parser warnings:</strong></p>
+                              {parsingDetails.ingredientWarnings.map((warning) => (
+                                <p key={warning}>{warning}</p>
+                              ))}
+                            </div>
+                          )}
+                          <p><strong>AI recipe JSON</strong></p>
+                          <textarea
+                            className={styles.detailsTextarea}
+                            readOnly
+                            value={JSON.stringify(parsingDetails.parsedRecipe, null, 2)}
+                            aria-label="AI parsed recipe JSON"
+                          />
+                          <p><strong>Mealie import payload</strong></p>
+                          <textarea
+                            className={styles.detailsTextarea}
+                            readOnly
+                            value={JSON.stringify(parsingDetails.importPayload, null, 2)}
+                            aria-label="Mealie import payload JSON"
+                          />
+                        </div>
+                      )}
                     </span>
                   </li>
                 );
@@ -342,7 +404,7 @@ export default function App() {
             {/* Success banner */}
             {phase === "done" && recipeUrl && (
               <div className={styles.successBanner}>
-                <p>Recipe imported! Redirecting you to Mealie...</p>
+                <p>Recipe imported successfully.</p>
                 <a href={recipeUrl} className={styles.link}>
                   Open recipe &rarr;
                 </a>

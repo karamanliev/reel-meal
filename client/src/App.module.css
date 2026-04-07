@@ -255,6 +255,8 @@
   display: flex;
   flex-direction: column;
   gap: 0.1rem;
+  flex: 1;
+  min-width: 0;
 }
 
 .stepLabel {
@@ -292,6 +294,8 @@
   background: #171b25;
   display: grid;
   gap: 0.35rem;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .detailsPanel p {
@@ -303,7 +307,7 @@
 
 .detailsTextarea {
   width: 100%;
-  min-height: 7rem;
+  min-height: 9rem;
   resize: vertical;
   border: 1px solid #3a4052;
   border-radius: 0.35rem;
@@ -313,6 +317,15 @@
   line-height: 1.4;
   padding: 0.45rem 0.5rem;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  box-sizing: border-box;
+  display: block;
+}
+
+.warningBlock {
+  padding: 0.45rem 0.5rem;
+  border: 1px solid #5d4728;
+  border-radius: 0.35rem;
+  background: rgba(245, 158, 11, 0.08);
 }
 
 /* Status-specific colours */
