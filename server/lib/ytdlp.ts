@@ -31,6 +31,39 @@ function ytdlp(args: string[]): Promise<{ stdout: string; stderr: string }> {
   return execFileAsync("yt-dlp", args, { maxBuffer: 50 * 1024 * 1024 });
 }
 
+function chooseBestTitle(data: Record<string, unknown>): string {
+  const rawTitle = String(data.title ?? "").trim();
+  const description = String(data.description ?? "");
+  const uploader = String(data.uploader ?? data.channel ?? "").trim().toLowerCase();
+  const lowerTitle = rawTitle.toLowerCase();
+
+  const genericTitle =
+    !rawTitle ||
+    lowerTitle.startsWith("video by ") ||
+    lowerTitle.startsWith("post by ") ||
+    lowerTitle === uploader;
+
+  if (!genericTitle) return rawTitle;
+
+  const lines = description
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .filter((line) => !line.startsWith("#"));
+
+  if (!lines.length) return rawTitle || "Untitled Recipe";
+
+  let title = lines[0];
+  if (lines[1] && title.length < 60 && !/[.!?]$/.test(title)) {
+    const combined = `${title} ${lines[1]}`.replace(/\s+/g, " ").trim();
+    if (combined.length <= 110) {
+      title = combined;
+    }
+  }
+
+  return title;
+}
+
 /**
  * Fetch video metadata (title, description, thumbnail, etc.) without downloading.
  */
@@ -57,7 +90,7 @@ export async function fetchMetadata(url: string): Promise<VideoMetadata> {
     (data.automatic_captions && Object.keys(data.automatic_captions).length > 0);
 
   return {
-    title: data.title || "Untitled Recipe",
+    title: chooseBestTitle(data),
     description: data.description || "",
     thumbnailUrl: thumbnail || "",
     duration: data.duration || 0,

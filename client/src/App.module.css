@@ -267,6 +267,54 @@
   color: #888;
 }
 
+.detailsButton {
+  align-self: flex-start;
+  margin-top: 0.25rem;
+  padding: 0.2rem 0.45rem;
+  font-size: 0.75rem;
+  color: #c7ccd8;
+  background: transparent;
+  border: 1px solid #3d4252;
+  border-radius: 0.35rem;
+  cursor: pointer;
+}
+
+.detailsButton:hover {
+  border-color: #535a70;
+  color: #e6e9f2;
+}
+
+.detailsPanel {
+  margin-top: 0.5rem;
+  padding: 0.55rem;
+  border: 1px solid #303646;
+  border-radius: 0.45rem;
+  background: #171b25;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.detailsPanel p {
+  margin: 0;
+  font-size: 0.75rem;
+  color: #aeb5c7;
+  overflow-wrap: anywhere;
+}
+
+.detailsTextarea {
+  width: 100%;
+  min-height: 7rem;
+  resize: vertical;
+  border: 1px solid #3a4052;
+  border-radius: 0.35rem;
+  background: #11151d;
+  color: #cfd5e3;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  padding: 0.45rem 0.5rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
 /* Status-specific colours */
 
 .step--idle .stepIcon {

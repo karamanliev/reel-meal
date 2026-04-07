@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
+import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
 import type { ParsedRecipe } from "./llm.js";
 
@@ -12,6 +13,13 @@ function headers(extra: Record<string, string> = {}): Record<string, string> {
     Authorization: `Bearer ${config.mealieApiToken}`,
     ...extra,
   };
+}
+
+function toIsoDurationOrNull(value?: string): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  const isoDurationPattern = /^P(?=.+)(?:\d+Y)?(?:\d+M)?(?:\d+W)?(?:\d+D)?(?:T(?:\d+H)?(?:\d+M)?(?:\d+(?:\.\d+)?S)?)?$/i;
+  return isoDurationPattern.test(trimmed) ? trimmed.toUpperCase() : null;
 }
 
 async function mealieRequest<T>(
@@ -34,7 +42,10 @@ async function mealieRequest<T>(
 
   if (!res.ok) {
     const text = await res.text().catch(() => "(no body)");
-    throw new Error(`Mealie API ${method} ${path} → ${res.status} ${res.statusText}: ${text}`);
+    const bodyPreview = body === undefined ? "(no body)" : JSON.stringify(body).slice(0, 1500);
+    throw new Error(
+      `Mealie API ${method} ${path} → ${res.status} ${res.statusText}: ${text} | payload=${bodyPreview}`
+    );
   }
 
   // 204 No Content
@@ -139,16 +150,61 @@ export async function updateRecipe(
     slug: string;
   }
 
+  const transformedIngredients = recipe.recipeIngredient.map((ingredient) => {
+    const line = ingredient.originalText?.trim() || ingredient.note?.trim() || "";
+
+    return {
+      quantity: typeof ingredient.quantity === "number" ? ingredient.quantity : 0,
+      unit: null,
+      food: null,
+      note: line,
+      display: line,
+      title: null,
+      originalText: line || null,
+      referenceId: randomUUID(),
+    };
+  });
+
+  const transformedSteps = recipe.recipeInstructions.map((step) => ({
+    id: randomUUID(),
+    title: step.title?.trim() || "",
+    summary: "",
+    text: step.text,
+    ingredientReferences: [],
+  }));
+
   const payload = {
-    ...recipe,
+    name: recipe.name,
+    description: recipe.description,
+    recipeServings: recipe.recipeServings ?? 0,
+    prepTime: toIsoDurationOrNull(recipe.prepTime),
+    cookTime: toIsoDurationOrNull(recipe.cookTime),
+    totalTime: toIsoDurationOrNull(recipe.totalTime),
+    recipeIngredient: transformedIngredients,
+    recipeInstructions: transformedSteps,
+    recipeCategory: [],
+    tags: [],
+    nutrition: recipe.nutrition,
     orgURL: originalUrl,
   };
 
-  const updated = await mealieRequest<RecipeResponse>(
-    "PATCH",
-    `/api/recipes/${slug}`,
-    payload
-  );
+  let updated: RecipeResponse;
+  try {
+    updated = await mealieRequest<RecipeResponse>("PATCH", `/api/recipes/${slug}`, payload);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!message.includes("Recipe already exists")) {
+      throw err;
+    }
+
+    const uniqueSuffix = Date.now().toString(36).slice(-4);
+    const retryPayload = {
+      ...payload,
+      name: `${recipe.name} (${uniqueSuffix})`,
+    };
+
+    updated = await mealieRequest<RecipeResponse>("PATCH", `/api/recipes/${slug}`, retryPayload);
+  }
 
   return updated.slug ?? slug;
 }

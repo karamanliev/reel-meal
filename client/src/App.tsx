@@ -18,7 +18,12 @@ interface SSEEvent {
     thumbnailUrl?: string;
     duration?: number;
     uploader?: string;
+    description?: string;
+    webpageUrl?: string;
+    thumbnailSourceUrl?: string;
     hasSubtitles?: boolean;
+    transcript?: string;
+    source?: "subtitles" | "audio";
     recipeUrl?: string;
     slug?: string;
   };
@@ -27,6 +32,21 @@ interface SSEEvent {
 interface StepState {
   status: StepStatus;
   message: string;
+}
+
+interface MetadataDetails {
+  title: string;
+  uploader?: string;
+  duration?: number;
+  description?: string;
+  webpageUrl?: string;
+  thumbnailSourceUrl?: string;
+  hasSubtitles?: boolean;
+}
+
+interface TranscriptDetails {
+  transcript: string;
+  source: "subtitles" | "audio";
 }
 
 const STEPS: { id: StepName; label: string }[] = [
@@ -56,6 +76,9 @@ export default function App() {
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
   const [recipeUrl, setRecipeUrl] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [metadataDetails, setMetadataDetails] = useState<MetadataDetails | null>(null);
+  const [transcriptDetails, setTranscriptDetails] = useState<TranscriptDetails | null>(null);
+  const [expandedDetails, setExpandedDetails] = useState<Partial<Record<StepName, boolean>>>({});
 
   const eventSourceRef = useRef<EventSource | null>(null);
   // Track which step is currently active so errors can be attributed correctly
@@ -74,6 +97,13 @@ export default function App() {
     setThumbnailUrl(null);
     setRecipeUrl(null);
     setErrorMessage(null);
+    setMetadataDetails(null);
+    setTranscriptDetails(null);
+    setExpandedDetails({});
+  };
+
+  const toggleDetails = (step: StepName) => {
+    setExpandedDetails((prev) => ({ ...prev, [step]: !prev[step] }));
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -106,6 +136,29 @@ export default function App() {
         if (msg.step === "metadata" && msg.data) {
           if (msg.data.title) setRecipeTitle(msg.data.title);
           if (msg.data.thumbnailUrl) setThumbnailUrl(msg.data.thumbnailUrl);
+
+          if (msg.data.title) {
+            setMetadataDetails({
+              title: msg.data.title,
+              uploader: msg.data.uploader,
+              duration: msg.data.duration,
+              description: msg.data.description,
+              webpageUrl: msg.data.webpageUrl,
+              thumbnailSourceUrl: msg.data.thumbnailSourceUrl,
+              hasSubtitles: msg.data.hasSubtitles,
+            });
+          }
+        }
+
+        if (
+          msg.step === "transcript" &&
+          typeof msg.data?.transcript === "string" &&
+          (msg.data.source === "subtitles" || msg.data.source === "audio")
+        ) {
+          setTranscriptDetails({
+            transcript: msg.data.transcript,
+            source: msg.data.source,
+          });
         }
 
         // Final step done
@@ -211,6 +264,10 @@ export default function App() {
             <ol className={styles.steps}>
               {STEPS.map((step) => {
                 const state = steps[step.id];
+                const hasDetails =
+                  (step.id === "metadata" && Boolean(metadataDetails)) ||
+                  (step.id === "transcript" && Boolean(transcriptDetails));
+                const detailsOpen = Boolean(expandedDetails[step.id]);
                 return (
                   <li
                     key={step.id}
@@ -226,6 +283,55 @@ export default function App() {
                       <span className={styles.stepLabel}>{step.label}</span>
                       {state.message && (
                         <span className={styles.stepMessage}>{state.message}</span>
+                      )}
+                      {hasDetails && (
+                        <button
+                          type="button"
+                          className={styles.detailsButton}
+                          onClick={() => toggleDetails(step.id)}
+                        >
+                          {detailsOpen ? "Hide details" : "Show details"}
+                        </button>
+                      )}
+                      {step.id === "metadata" && detailsOpen && metadataDetails && (
+                        <div className={styles.detailsPanel}>
+                          <p><strong>Title:</strong> {metadataDetails.title}</p>
+                          {metadataDetails.uploader && <p><strong>Uploader:</strong> {metadataDetails.uploader}</p>}
+                          {typeof metadataDetails.duration === "number" && (
+                            <p><strong>Duration:</strong> {Math.round(metadataDetails.duration)}s</p>
+                          )}
+                          <p><strong>Subtitles available:</strong> {metadataDetails.hasSubtitles ? "Yes" : "No"}</p>
+                          {metadataDetails.webpageUrl && (
+                            <p><strong>Video URL:</strong> {metadataDetails.webpageUrl}</p>
+                          )}
+                          {metadataDetails.thumbnailSourceUrl && (
+                            <p><strong>Thumbnail source:</strong> {metadataDetails.thumbnailSourceUrl}</p>
+                          )}
+                          {metadataDetails.description && (
+                            <textarea
+                              className={styles.detailsTextarea}
+                              readOnly
+                              value={metadataDetails.description}
+                              aria-label="Video description"
+                            />
+                          )}
+                        </div>
+                      )}
+                      {step.id === "transcript" && detailsOpen && transcriptDetails && (
+                        <div className={styles.detailsPanel}>
+                          <p>
+                            <strong>Source:</strong>{" "}
+                            {transcriptDetails.source === "subtitles"
+                              ? "Subtitles"
+                              : "Audio transcription"}
+                          </p>
+                          <textarea
+                            className={styles.detailsTextarea}
+                            readOnly
+                            value={transcriptDetails.transcript}
+                            aria-label="Extracted transcript"
+                          />
+                        </div>
                       )}
                     </span>
                   </li>

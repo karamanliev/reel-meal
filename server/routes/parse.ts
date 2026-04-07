@@ -41,6 +41,40 @@ export function isJobRunning(): boolean {
 
 export const parseRouter = new Hono();
 
+parseRouter.get("/api/thumbnail", async (c) => {
+  const thumbnailUrl = c.req.query("url");
+
+  if (!thumbnailUrl) {
+    return c.json({ error: "Missing required query parameter: url" }, 400);
+  }
+
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(thumbnailUrl);
+  } catch {
+    return c.json({ error: "Invalid thumbnail URL" }, 400);
+  }
+
+  if (parsedUrl.protocol !== "https:" && parsedUrl.protocol !== "http:") {
+    return c.json({ error: "Unsupported thumbnail URL protocol" }, 400);
+  }
+
+  const response = await fetch(parsedUrl.toString());
+  if (!response.ok) {
+    return c.json(
+      { error: `Failed to fetch thumbnail: ${response.status} ${response.statusText}` },
+      502
+    );
+  }
+
+  const image = await response.arrayBuffer();
+  const contentType = response.headers.get("content-type") ?? "image/jpeg";
+
+  c.header("Content-Type", contentType);
+  c.header("Cache-Control", "public, max-age=1800");
+  return c.body(image);
+});
+
 parseRouter.get("/api/parse", async (c) => {
   const url = c.req.query("url");
   const translate = c.req.query("translate") === "true";
@@ -77,6 +111,9 @@ parseRouter.get("/api/parse", async (c) => {
       await emit({ step: "metadata", status: "loading", message: "Fetching video info..." });
 
       const metadata = await fetchMetadata(url);
+      const proxiedThumbnailUrl = metadata.thumbnailUrl
+        ? `/api/thumbnail?url=${encodeURIComponent(metadata.thumbnailUrl)}`
+        : "";
       console.log(`[parse] Metadata fetched: "${metadata.title}"`);
 
       await emit({
@@ -85,9 +122,12 @@ parseRouter.get("/api/parse", async (c) => {
         message: `Found: ${metadata.title}`,
         data: {
           title: metadata.title,
-          thumbnailUrl: metadata.thumbnailUrl,
+          thumbnailUrl: proxiedThumbnailUrl,
           duration: metadata.duration,
           uploader: metadata.uploader,
+          description: metadata.description,
+          webpageUrl: metadata.webpageUrl,
+          thumbnailSourceUrl: metadata.thumbnailUrl,
           hasSubtitles: metadata.hasSubtitles,
         },
       });
@@ -96,6 +136,7 @@ parseRouter.get("/api/parse", async (c) => {
       // Step 2: Get transcript
       // ----------------------------------------------------------------
       let transcript: string;
+      let transcriptSource: "subtitles" | "audio";
 
       if (metadata.hasSubtitles) {
         await emit({
@@ -108,11 +149,16 @@ parseRouter.get("/api/parse", async (c) => {
 
         if (subs) {
           transcript = subs.text;
+          transcriptSource = "subtitles";
           console.log(`[parse] Got subtitles (${transcript.length} chars)`);
           await emit({
             step: "transcript",
             status: "done",
             message: "Subtitles extracted.",
+            data: {
+              transcript,
+              source: transcriptSource,
+            },
           });
         } else {
           // Subtitles reported but extraction failed — fall through to audio
@@ -133,9 +179,18 @@ parseRouter.get("/api/parse", async (c) => {
           });
 
           transcript = await transcribeAudio(audioResult.filePath);
+          transcriptSource = "audio";
           console.log(`[parse] Transcription done (${transcript.length} chars)`);
 
-          await emit({ step: "transcript", status: "done", message: "Audio transcribed." });
+          await emit({
+            step: "transcript",
+            status: "done",
+            message: "Audio transcribed.",
+            data: {
+              transcript,
+              source: transcriptSource,
+            },
+          });
         }
       } else {
         await emit({
@@ -154,9 +209,18 @@ parseRouter.get("/api/parse", async (c) => {
         });
 
         transcript = await transcribeAudio(audioResult.filePath);
+        transcriptSource = "audio";
         console.log(`[parse] Transcription done (${transcript.length} chars)`);
 
-        await emit({ step: "transcript", status: "done", message: "Audio transcribed." });
+        await emit({
+          step: "transcript",
+          status: "done",
+          message: "Audio transcribed.",
+          data: {
+            transcript,
+            source: transcriptSource,
+          },
+        });
       }
 
       // Clean up audio ASAP
