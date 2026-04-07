@@ -101,7 +101,13 @@ Rules:
 - Keep instruction steps atomic — one action per step.
 - Choose appropriate categories (e.g. "Dinner", "Breakfast", "Dessert", "Soup") and tags (e.g. "Italian", "Vegetarian", "Quick", "Gluten-Free").
 - If nutrition info is not mentioned, omit the nutrition field entirely.
-- The transcript may be noisy — use the description and title to fill gaps.`;
+- The transcript may be noisy — use the description and title to fill gaps.
+- LANGUAGE: Keep ALL text (name, description, ingredients, instructions, notes) in the original language of the recipe. Do NOT translate anything.`;
+
+const SYSTEM_PROMPT_TRANSLATE = SYSTEM_PROMPT.replace(
+  "- LANGUAGE: Keep ALL text (name, description, ingredients, instructions, notes) in the original language of the recipe. Do NOT translate anything.",
+  "- LANGUAGE: Translate ALL text (name, description, ingredients, instructions, notes, categories, tags) into English."
+);
 
 // -------------------------------------------------------------------------
 // Main parsing function
@@ -116,8 +122,10 @@ export async function parseRecipeFromTranscript(params: {
   title: string;
   description: string;
   transcript: string;
+  translate?: boolean;
 }): Promise<ParsedRecipe> {
-  const { title, description, transcript } = params;
+  const { title, description, transcript, translate = false } = params;
+  const systemPrompt = translate ? SYSTEM_PROMPT_TRANSLATE : SYSTEM_PROMPT;
 
   // Trim transcript to avoid hitting context limits (keep ~12k chars)
   const trimmedTranscript =
@@ -146,7 +154,7 @@ ${trimmedTranscript}`;
       const response = await client.chat.completions.create({
         model: config.openaiModel,
         messages: [
-          { role: "system", content: SYSTEM_PROMPT + extraInstruction },
+          { role: "system", content: systemPrompt + extraInstruction },
           { role: "user", content: userMessage },
         ],
         temperature: 0.2,

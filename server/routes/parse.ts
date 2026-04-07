@@ -43,6 +43,7 @@ export const parseRouter = new Hono();
 
 parseRouter.get("/api/parse", async (c) => {
   const url = c.req.query("url");
+  const translate = c.req.query("translate") === "true";
 
   if (!url) {
     return c.json({ error: "Missing required query parameter: url" }, 400);
@@ -177,6 +178,7 @@ parseRouter.get("/api/parse", async (c) => {
         title: metadata.title,
         description: metadata.description,
         transcript,
+        translate,
       });
 
       console.log(`[parse] Recipe parsed: "${recipe.name}" with ${recipe.recipeIngredient.length} ingredients`);

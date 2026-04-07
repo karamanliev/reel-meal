@@ -49,6 +49,7 @@ const DEFAULT_STEPS: Record<StepName, StepState> = {
 
 export default function App() {
   const [url, setUrl] = useState("");
+  const [translate, setTranslate] = useState(false);
   const [phase, setPhase] = useState<"input" | "loading" | "done" | "error">("input");
   const [steps, setSteps] = useState<Record<StepName, StepState>>(DEFAULT_STEPS);
   const [recipeTitle, setRecipeTitle] = useState<string | null>(null);
@@ -89,7 +90,7 @@ export default function App() {
     setPhase("loading");
 
     const encodedUrl = encodeURIComponent(videoUrl);
-    const es = new EventSource(`/api/parse?url=${encodedUrl}`);
+    const es = new EventSource(`/api/parse?url=${encodedUrl}&translate=${translate}`);
     eventSourceRef.current = es;
 
     es.addEventListener("message", (event: MessageEvent) => {
@@ -177,6 +178,15 @@ export default function App() {
               {isLoading ? "Processing..." : "Import Recipe"}
             </button>
           </div>
+          <label className={styles.toggle}>
+            <input
+              type="checkbox"
+              checked={translate}
+              onChange={(e) => setTranslate(e.target.checked)}
+              disabled={isLoading}
+            />
+            <span>Translate recipe to English</span>
+          </label>
         </form>
 
         {(phase === "loading" || phase === "done" || phase === "error") && (

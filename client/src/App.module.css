@@ -124,6 +124,62 @@
 }
 
 /* -------------------------------------------------------------------------
+   Translate toggle
+   ------------------------------------------------------------------------- */
+
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+  font-size: 0.875rem;
+  color: #888;
+  cursor: pointer;
+  user-select: none;
+}
+
+.toggle input[type="checkbox"] {
+  appearance: none;
+  width: 1rem;
+  height: 1rem;
+  border: 1px solid #444;
+  border-radius: 0.25rem;
+  background: #1c1f28;
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.toggle input[type="checkbox"]:checked {
+  background: #4ade80;
+  border-color: #4ade80;
+}
+
+.toggle input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  top: 1px;
+  left: 4px;
+  width: 4px;
+  height: 7px;
+  border: 2px solid #0f1117;
+  border-top: none;
+  border-left: none;
+  transform: rotate(45deg);
+}
+
+.toggle input[type="checkbox"]:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.toggle:has(input:disabled) {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* -------------------------------------------------------------------------
    Card
    ------------------------------------------------------------------------- */
 
