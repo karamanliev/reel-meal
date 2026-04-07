@@ -1,0 +1,12 @@
+services:
+  mealie-recipe-parser:
+    build: .
+    container_name: mealie-recipe-parser
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    restart: unless-stopped
+    # Writable /tmp for yt-dlp temp files (audio, subtitles, thumbnails)
+    tmpfs:
+      - /tmp:size=2g,mode=1777
