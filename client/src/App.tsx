@@ -58,6 +58,23 @@ interface ParsingDetails {
   ingredientWarnings: string[];
 }
 
+interface DiffEntry {
+  label: string;
+  before: string;
+  after: string;
+}
+
+interface IngredientDiff {
+  title: string;
+  changes: DiffEntry[];
+}
+
+interface ParsingDiff {
+  summary: Array<{ label: string; value: string }>;
+  recipeChanges: DiffEntry[];
+  ingredientChanges: IngredientDiff[];
+}
+
 const STEPS: { id: StepName; label: string }[] = [
   { id: "metadata", label: "Fetching video info" },
   { id: "transcript", label: "Extracting transcript" },
@@ -71,6 +88,152 @@ const DEFAULT_STEPS: Record<StepName, StepState> = {
   parsing: { status: "idle", message: "" },
   importing: { status: "idle", message: "" },
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function normalizeEmptyText(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return value.trim();
+}
+
+function formatDiffValue(value: unknown): string {
+  if (value == null) return "null";
+  if (typeof value === "string") return value || "empty";
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function getNamedValue(value: unknown): { name: string; id: string | null } {
+  if (!isRecord(value)) return { name: "", id: null };
+  return {
+    name: typeof value.name === "string" ? value.name.trim() : "",
+    id: typeof value.id === "string" ? value.id : null,
+  };
+}
+
+function getIngredients(value: unknown): Record<string, unknown>[] {
+  if (!isRecord(value) || !Array.isArray(value.recipeIngredient)) return [];
+  return value.recipeIngredient.filter(isRecord);
+}
+
+function sameJson(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function buildParsingDiff(details: ParsingDetails): ParsingDiff {
+  const parsedRecipe = isRecord(details.parsedRecipe) ? details.parsedRecipe : {};
+  const importPayload = isRecord(details.importPayload) ? details.importPayload : {};
+
+  const recipeChanges: DiffEntry[] = [];
+  const recipeFields: Array<[key: string, label: string]> = [
+    ["recipeServings", "Servings"],
+    ["recipeCategory", "Categories"],
+    ["tags", "Tags"],
+    ["nutrition", "Nutrition"],
+    ["orgURL", "Source URL"],
+  ];
+
+  for (const [key, label] of recipeFields) {
+    const before = parsedRecipe[key];
+    const after = importPayload[key];
+    if (!sameJson(before, after)) {
+      recipeChanges.push({
+        label,
+        before: formatDiffValue(before),
+        after: formatDiffValue(after),
+      });
+    }
+  }
+
+  const parsedIngredients = getIngredients(parsedRecipe);
+  const importedIngredients = getIngredients(importPayload);
+  const ingredientChanges: IngredientDiff[] = [];
+
+  for (let index = 0; index < Math.max(parsedIngredients.length, importedIngredients.length); index += 1) {
+    const parsedIngredient = parsedIngredients[index] ?? {};
+    const importedIngredient = importedIngredients[index] ?? {};
+    const title =
+      (typeof importedIngredient.originalText === "string" && importedIngredient.originalText) ||
+      (typeof parsedIngredient.originalText === "string" && parsedIngredient.originalText) ||
+      `Ingredient ${index + 1}`;
+
+    const changes: DiffEntry[] = [];
+
+    if (!sameJson(parsedIngredient.quantity, importedIngredient.quantity)) {
+      changes.push({
+        label: "Quantity",
+        before: formatDiffValue(parsedIngredient.quantity),
+        after: formatDiffValue(importedIngredient.quantity),
+      });
+    }
+
+    const parsedUnit = getNamedValue(parsedIngredient.unit);
+    const importedUnit = getNamedValue(importedIngredient.unit);
+    if (parsedUnit.name !== importedUnit.name) {
+      changes.push({
+        label: "Unit",
+        before: parsedUnit.name || "none",
+        after: importedUnit.name || "none",
+      });
+    } else if (parsedUnit.name && importedUnit.id) {
+      changes.push({
+        label: "Unit linked",
+        before: parsedUnit.name,
+        after: `${importedUnit.name} (${importedUnit.id.slice(0, 8)}...)`,
+      });
+    }
+
+    const parsedFood = getNamedValue(parsedIngredient.food);
+    const importedFood = getNamedValue(importedIngredient.food);
+    if (parsedFood.name !== importedFood.name) {
+      changes.push({
+        label: "Food",
+        before: parsedFood.name || "none",
+        after: importedFood.name || "none",
+      });
+    } else if (parsedFood.name && importedFood.id) {
+      changes.push({
+        label: "Food linked",
+        before: parsedFood.name,
+        after: `${importedFood.name} (${importedFood.id.slice(0, 8)}...)`,
+      });
+    }
+
+    const parsedNote = normalizeEmptyText(parsedIngredient.note);
+    const importedNote = normalizeEmptyText(importedIngredient.note);
+    if (parsedNote !== importedNote) {
+      changes.push({
+        label: "Note",
+        before: parsedNote || "empty",
+        after: importedNote || "empty",
+      });
+    }
+
+    if (changes.length > 0) {
+      ingredientChanges.push({ title, changes });
+    }
+  }
+
+  const importedFoodLinks = importedIngredients.filter((ingredient) => getNamedValue(ingredient.food).id).length;
+  const importedUnitLinks = importedIngredients.filter((ingredient) => getNamedValue(ingredient.unit).id).length;
+
+  return {
+    summary: [
+      { label: "Foods linked", value: String(importedFoodLinks) },
+      { label: "Units linked", value: String(importedUnitLinks) },
+      { label: "Recipe changes", value: String(recipeChanges.length) },
+      { label: "Ingredients changed", value: String(ingredientChanges.length) },
+    ],
+    recipeChanges,
+    ingredientChanges,
+  };
+}
 
 // -------------------------------------------------------------------------
 // Component
@@ -219,6 +382,7 @@ export default function App() {
   };
 
   const isLoading = phase === "loading";
+  const parsingDiff = parsingDetails ? buildParsingDiff(parsingDetails) : null;
 
   return (
     <div className={styles.root}>
@@ -381,20 +545,84 @@ export default function App() {
                               ))}
                             </div>
                           )}
-                          <p><strong>AI recipe JSON</strong></p>
-                          <textarea
-                            className={styles.detailsTextarea}
-                            readOnly
-                            value={JSON.stringify(parsingDetails.parsedRecipe, null, 2)}
-                            aria-label="AI parsed recipe JSON"
-                          />
-                          <p><strong>Mealie import payload</strong></p>
-                          <textarea
-                            className={styles.detailsTextarea}
-                            readOnly
-                            value={JSON.stringify(parsingDetails.importPayload, null, 2)}
-                            aria-label="Mealie import payload JSON"
-                          />
+                          {parsingDiff && (
+                            <>
+                              <div className={styles.diffSummaryGrid}>
+                                {parsingDiff.summary.map((item) => (
+                                  <div key={item.label} className={styles.diffSummaryCard}>
+                                    <span className={styles.diffSummaryValue}>{item.value}</span>
+                                    <span className={styles.diffSummaryLabel}>{item.label}</span>
+                                  </div>
+                                ))}
+                              </div>
+
+                              {parsingDiff.recipeChanges.length > 0 && (
+                                <div className={styles.diffSection}>
+                                  <p><strong>Recipe-level changes</strong></p>
+                                  <div className={styles.diffList}>
+                                    {parsingDiff.recipeChanges.map((change) => (
+                                      <div key={change.label} className={styles.diffRow}>
+                                        <span className={styles.diffLabel}>{change.label}</span>
+                                        <span className={styles.diffValues}>
+                                          <span className={styles.diffBefore}>{change.before}</span>
+                                          <span className={styles.diffArrow} aria-hidden="true">-&gt;</span>
+                                          <span className={styles.diffAfter}>{change.after}</span>
+                                        </span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {parsingDiff.ingredientChanges.length > 0 && (
+                                <div className={styles.diffSection}>
+                                  <p><strong>Ingredient changes</strong></p>
+                                  <div className={styles.ingredientDiffList}>
+                                    {parsingDiff.ingredientChanges.map((ingredient, ingredientIndex) => (
+                                      <div key={`${ingredientIndex}-${ingredient.title}`} className={styles.ingredientDiffCard}>
+                                        <p className={styles.ingredientDiffTitle}>{ingredient.title}</p>
+                                        <div className={styles.diffList}>
+                                          {ingredient.changes.map((change) => (
+                                            <div
+                                              key={`${ingredient.title}-${change.label}`}
+                                              className={styles.diffRow}
+                                            >
+                                              <span className={styles.diffLabel}>{change.label}</span>
+                                              <span className={styles.diffValues}>
+                                                <span className={styles.diffBefore}>{change.before}</span>
+                                                <span className={styles.diffArrow} aria-hidden="true">-&gt;</span>
+                                                <span className={styles.diffAfter}>{change.after}</span>
+                                              </span>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </>
+                          )}
+
+                          <details className={styles.rawDetails}>
+                            <summary className={styles.rawDetailsSummary}>Raw AI recipe JSON</summary>
+                            <textarea
+                              className={styles.detailsTextarea}
+                              readOnly
+                              value={JSON.stringify(parsingDetails.parsedRecipe, null, 2)}
+                              aria-label="AI parsed recipe JSON"
+                            />
+                          </details>
+
+                          <details className={styles.rawDetails}>
+                            <summary className={styles.rawDetailsSummary}>Raw Mealie import payload</summary>
+                            <textarea
+                              className={styles.detailsTextarea}
+                              readOnly
+                              value={JSON.stringify(parsingDetails.importPayload, null, 2)}
+                              aria-label="Mealie import payload JSON"
+                            />
+                          </details>
                         </div>
                       )}
                     </span>

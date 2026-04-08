@@ -336,6 +336,129 @@
   background: rgba(245, 158, 11, 0.08);
 }
 
+.diffSummaryGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 0.5rem;
+}
+
+.diffSummaryCard {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid #303646;
+  border-radius: 0.45rem;
+  background: #121722;
+}
+
+.diffSummaryValue {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #f3f6fc;
+}
+
+.diffSummaryLabel {
+  font-size: 0.72rem;
+  color: #93a0b8;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.diffSection {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.diffList {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.diffRow {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.45rem 0.5rem;
+  border: 1px solid #2b3140;
+  border-radius: 0.4rem;
+  background: #11161f;
+}
+
+.diffLabel {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #c5cedf;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.diffValues {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
+.diffBefore {
+  color: #d2a6a6;
+}
+
+.diffArrow {
+  color: #76839c;
+}
+
+.diffAfter {
+  color: #9fe2b0;
+}
+
+.ingredientDiffList {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.ingredientDiffCard {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.6rem;
+  border: 1px solid #303646;
+  border-radius: 0.45rem;
+  background: #141925;
+}
+
+.ingredientDiffTitle {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #edf1f8;
+}
+
+.rawDetails {
+  border: 1px solid #303646;
+  border-radius: 0.45rem;
+  background: #121722;
+  overflow: hidden;
+}
+
+.rawDetailsSummary {
+  cursor: pointer;
+  padding: 0.55rem 0.65rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #c7cfdf;
+  user-select: none;
+}
+
+.rawDetails[open] .rawDetailsSummary {
+  border-bottom: 1px solid #2f3646;
+}
+
+.rawDetails .detailsTextarea {
+  border: none;
+  border-radius: 0;
+  min-height: 11rem;
+}
+
 /* Status-specific colours */
 
 .step--idle .stepIcon {
