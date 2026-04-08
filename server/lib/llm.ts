@@ -97,19 +97,33 @@ Schema:
 Rules:
 - Use ISO 8601 duration format for times (PT15M = 15 minutes, PT1H30M = 1 hour 30 minutes).
 - If a value is not mentioned, use null (not empty string, not 0).
-- Parse ingredients carefully: separate quantity, unit, food name, and any preparation notes.
-- Ingredient field rules:
-  - originalText must be the full natural ingredient line.
-  - quantity must contain only the numeric amount.
-  - unit.name must contain only the measurement unit.
-  - food.name must contain only the ingredient name, never quantity or unit text.
-  - note should contain only preparation details, optional qualifiers, or parenthetical text.
-  - Do not duplicate quantity or unit inside food, note, or originalText beyond the normal ingredient line.
-  - If the structure is uncertain, preserve a clean originalText and use null for uncertain structured fields instead of guessing.
 - Keep instruction steps atomic — one action per step.
 - Choose appropriate categories (e.g. "Dinner", "Breakfast", "Dessert", "Soup") and tags (e.g. "Italian", "Vegetarian", "Quick", "Gluten-Free").
 - If nutrition info is not mentioned, omit the nutrition field entirely.
 - The transcript may be noisy — use the description and title to fill gaps.
+
+Ingredient parsing rules — these are CRITICAL for correct import:
+- Each ingredient MUST be split into exactly these fields: quantity, unit, food, note.
+- quantity: a single number (integer or decimal). Use null if no amount is given.
+  - NEVER use 0 as a substitute for "no quantity". Use null.
+  - "3-4" → pick the middle: 3.5. Ranges go in note.
+  - Fractions: "½" → 0.5, "1½" → 1.5, "¼" → 0.25.
+- unit.name: ONLY the measurement unit word, nothing else.
+  - Examples: "г", "кг", "мл", "л", "бр", "ч.л.", "с.л.", "щипка", "cup", "tbsp", "tsp", "oz".
+  - If there is no unit (e.g. "3 яйца"), set unit to null. "яйца" is a food, not a unit.
+  - Countable foods (eggs, onions, cloves) do NOT need a unit — set unit to null.
+- food.name: ONLY the ingredient name in its base/dictionary form.
+  - NEVER include quantity, unit, or preparation details in food.name.
+  - Good: "пилешко филе", "лук", "чесън", "масло", "брашно", "яйца"
+  - Bad: "200г пилешко филе" (has quantity+unit), "нарязан лук" (has prep), "3 яйца" (has quantity)
+- note: preparation details, qualifiers, or clarifications ONLY.
+  - Good: "нарязан на кубчета", "finely chopped", "at room temperature", "по желание"
+  - If there is nothing to note, use null (not empty string).
+- originalText: the FULL natural ingredient line as a human would read it.
+  - Example: "200 г пилешко филе, нарязано на кубчета"
+- NEVER duplicate quantity or unit text inside food.name or note.
+- If the ingredient structure is truly unclear, set quantity/unit/food to null and put everything in originalText + note so no information is lost.
+
 - LANGUAGE: Keep ALL text (name, description, ingredients, instructions, notes) in the original language of the recipe. Do NOT translate anything.`;
 
 const SYSTEM_PROMPT_TRANSLATE = SYSTEM_PROMPT.replace(

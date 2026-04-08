@@ -257,24 +257,26 @@ export default function App() {
               {isLoading ? "Processing..." : "Import Recipe"}
             </button>
           </div>
-          <label className={styles.toggle}>
-            <input
-              type="checkbox"
-              checked={translate}
-              onChange={(e) => setTranslate(e.target.checked)}
-              disabled={isLoading}
-            />
-            <span>Translate recipe to English</span>
-          </label>
-          <label className={styles.toggle}>
-            <input
-              type="checkbox"
-              checked={extractTranscript}
-              onChange={(e) => setExtractTranscript(e.target.checked)}
-              disabled={isLoading}
-            />
-            <span>Extract video transcript</span>
-          </label>
+          <div className={styles.checkboxRow}>
+            <label className={styles.toggle}>
+              <input
+                type="checkbox"
+                checked={translate}
+                onChange={(e) => setTranslate(e.target.checked)}
+                disabled={isLoading}
+              />
+              <span>Translate to English</span>
+            </label>
+            <label className={styles.toggle}>
+              <input
+                type="checkbox"
+                checked={extractTranscript}
+                onChange={(e) => setExtractTranscript(e.target.checked)}
+                disabled={isLoading}
+              />
+              <span>Extract transcript</span>
+            </label>
+          </div>
         </form>
 
         {(phase === "loading" || phase === "done" || phase === "error") && (

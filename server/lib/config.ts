@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 
 // Load .env file manually (no dotenv dependency needed in Node 20+)
@@ -42,6 +42,11 @@ function optionalNumber(key: string, fallback: number): number {
   return n;
 }
 
+function detectCookiesFile(): string | null {
+  const candidate = resolve(process.cwd(), "cookies.txt");
+  return existsSync(candidate) ? candidate : null;
+}
+
 export const config = {
   port: optionalNumber("PORT", 3000),
 
@@ -56,6 +61,10 @@ export const config = {
   // Local Whisper (optional)
   whisperApiUrl: process.env["WHISPER_API_URL"] || null,
   whisperTimeoutMs: optionalNumber("WHISPER_TIMEOUT_MS", 15000),
+
+  // yt-dlp cookies file (optional, Netscape format — needed for Instagram, etc.)
+  // Auto-detects cookies.txt in project root; env var overrides.
+  ytdlpCookiesFile: process.env["YTDLP_COOKIES_FILE"] || detectCookiesFile(),
 
   // Mealie
   mealieUrl: required("MEALIE_URL").replace(/\/$/, ""),

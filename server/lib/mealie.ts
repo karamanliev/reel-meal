@@ -54,15 +54,31 @@ async function mealieRequest<T>(
   return res.json() as Promise<T>;
 }
 
-interface MealieNamedValue {
+// -------------------------------------------------------------------------
+// Mealie ingredient types
+//
+// Mealie's PATCH endpoint requires food/unit to include an `id` that
+// references an existing entity.  Sending { name: "..." } without an id
+// causes a 500 ValueError in the auto_init DB layer (MANYTOONE lookup).
+// Therefore we always resolve foods/units to ID-backed objects first.
+//
+// quantity: null means "no quantity" (e.g. "salt to taste").
+//          0 is avoided — Mealie treats both as falsy for display, but
+//          null is semantically correct.
+//
+// display:  "" lets Mealie auto-generate from structured fields with
+//           proper fraction/plural/locale formatting.
+// -------------------------------------------------------------------------
+
+interface MealieIdValue {
+  id: string;
   name: string;
-  id?: string | null;
 }
 
 interface MealieIngredientInput {
-  quantity: number;
-  unit: MealieNamedValue | null;
-  food: MealieNamedValue | null;
+  quantity: number | null;
+  unit: MealieIdValue | null;
+  food: MealieIdValue | null;
   note: string;
   display: string;
   title: string | null;
@@ -98,36 +114,98 @@ export interface PreparedRecipeImport {
   ingredientWarnings: string[];
 }
 
-interface IngredientParserConfidence {
-  average?: number;
-}
+// -------------------------------------------------------------------------
+// Food / Unit resolution with caching
+//
+// Flow: search by name -> if not found, create -> return { id, name }
+// Cached per-import to avoid duplicate API calls for the same name.
+// -------------------------------------------------------------------------
 
-interface IngredientParserResponse {
-  ingredient?: {
-    quantity?: number | null;
-    unit?: MealieNamedValue | null;
-    food?: MealieNamedValue | null;
-    note?: string | null;
-    display?: string | null;
-  };
-  confidence?: IngredientParserConfidence;
-}
+const foodCache = new Map<string, Promise<MealieIdValue | null>>();
+const unitCache = new Map<string, Promise<MealieIdValue | null>>();
 
-const foodCache = new Map<string, Promise<MealieNamedValue | null>>();
-const unitCache = new Map<string, Promise<MealieNamedValue | null>>();
-
-interface PaginatedNamedValuesResponse {
-  data?: Array<{ id: string; name: string }>;
+interface PaginatedResponse {
+  items?: Array<{ id: string; name: string }>;
 }
 
 function normalizeLookupKey(value: string): string {
   return value.trim().toLowerCase();
 }
 
-function normalizeIngredientLine(ingredient: RecipeIngredient): string {
+async function lookupNamedValue(path: string, name: string): Promise<MealieIdValue | null> {
+  const response = await mealieRequest<PaginatedResponse>(
+    "GET",
+    `${path}?search=${encodeURIComponent(name)}&perPage=50`
+  );
+
+  const items = response.items ?? [];
+
+  // Exact (case-insensitive) match
+  const exact = items.find(
+    (item) => normalizeLookupKey(item.name) === normalizeLookupKey(name)
+  );
+  if (exact) return { id: exact.id, name: exact.name };
+
+  // Accept first result if only one came back (close-enough match)
+  if (items.length === 1) {
+    return { id: items[0].id, name: items[0].name };
+  }
+
+  return null;
+}
+
+async function createNamedValue(path: string, name: string): Promise<MealieIdValue | null> {
+  try {
+    const created = await mealieRequest<{ id: string; name: string }>("POST", path, { name });
+    return { id: created.id, name: created.name };
+  } catch {
+    // Creation may fail if a race-condition duplicate exists — retry lookup
+    return lookupNamedValue(path, name);
+  }
+}
+
+function getCachedIdValue(
+  cache: Map<string, Promise<MealieIdValue | null>>,
+  path: string,
+  name: string
+): Promise<MealieIdValue | null> {
+  const key = normalizeLookupKey(name);
+  let pending = cache.get(key);
+  if (!pending) {
+    pending = lookupNamedValue(path, name)
+      .then((existing) => existing ?? createNamedValue(path, name))
+      .catch((err) => {
+        console.warn(`[mealie] Failed to resolve ${path} "${name}": ${err instanceof Error ? err.message : err}`);
+        // Remove from cache so a retry can succeed next time
+        cache.delete(key);
+        return null;
+      });
+    cache.set(key, pending);
+  }
+  return pending;
+}
+
+async function resolveFood(name: string | undefined | null): Promise<MealieIdValue | null> {
+  const trimmed = name?.trim();
+  if (!trimmed) return null;
+  return getCachedIdValue(foodCache, "/api/foods", trimmed);
+}
+
+async function resolveUnit(name: string | undefined | null): Promise<MealieIdValue | null> {
+  const trimmed = name?.trim();
+  if (!trimmed) return null;
+  return getCachedIdValue(unitCache, "/api/units", trimmed);
+}
+
+// -------------------------------------------------------------------------
+// Build ingredient line from LLM output (for originalText)
+// -------------------------------------------------------------------------
+
+function buildOriginalText(ingredient: RecipeIngredient): string {
   const originalText = ingredient.originalText?.trim();
   if (originalText) return originalText;
 
+  // Reconstruct from structured fields
   const parts = [
     typeof ingredient.quantity === "number" ? String(ingredient.quantity) : "",
     ingredient.unit?.name?.trim() ?? "",
@@ -140,146 +218,40 @@ function normalizeIngredientLine(ingredient: RecipeIngredient): string {
   return parts.join(" ").trim();
 }
 
-function buildFallbackIngredient(line: string): MealieIngredientInput {
-  return {
-    quantity: 0,
-    unit: null,
-    food: null,
-    note: "",
-    display: line,
-    title: null,
-    originalText: line,
-    referenceId: randomUUID(),
-  };
-}
+// -------------------------------------------------------------------------
+// Build note fallback when food/unit resolution fails
+// -------------------------------------------------------------------------
 
-function buildLlmIngredient(line: string, ingredient: RecipeIngredient): MealieIngredientInput {
-  return {
-    quantity: typeof ingredient.quantity === "number" && Number.isFinite(ingredient.quantity) ? ingredient.quantity : 0,
-    unit: ingredient.unit?.name?.trim() ? { name: ingredient.unit.name.trim() } : null,
-    food: ingredient.food?.name?.trim() ? { name: ingredient.food.name.trim() } : null,
-    note: ingredient.note?.trim() || "",
-    display: line,
-    title: null,
-    originalText: line,
-    referenceId: randomUUID(),
-  };
-}
-
-function foodLooksUnparsed(foodName: string, line: string, unitName?: string | null): boolean {
-  const trimmedFood = foodName.trim().toLowerCase();
-  const trimmedLine = line.trim().toLowerCase();
-  if (!trimmedFood) return true;
-  if (trimmedFood === trimmedLine) return true;
-  if (unitName && trimmedFood.startsWith(unitName.trim().toLowerCase())) return true;
-  return /^(?:\d+(?:[.,]\d+)?|\d+\/\d+|[¼½¾⅓⅔⅛⅜⅝⅞])/.test(trimmedFood);
-}
-
-function isWeakIngredientParse(
-  parsed: MealieIngredientInput,
-  line: string,
-  confidence?: IngredientParserConfidence
-): boolean {
-  if (!parsed.food?.name?.trim()) return true;
-  if (foodLooksUnparsed(parsed.food.name, line, parsed.unit?.name)) return true;
-  if (typeof confidence?.average === "number" && confidence.average < 0.7) return true;
-  return false;
-}
-
-async function lookupNamedValue(path: string, name: string): Promise<MealieNamedValue | null> {
-  const response = await mealieRequest<PaginatedNamedValuesResponse>(
-    "GET",
-    `${path}?search=${encodeURIComponent(name)}&perPage=50`
-  );
-
-  const match = response.data?.find((item) => normalizeLookupKey(item.name) === normalizeLookupKey(name));
-  return match ? { id: match.id, name: match.name } : null;
-}
-
-async function createNamedValue(path: string, name: string): Promise<MealieNamedValue | null> {
-  try {
-    const created = await mealieRequest<{ id: string; name: string }>("POST", path, { name });
-    return { id: created.id, name: created.name };
-  } catch {
-    return lookupNamedValue(path, name);
-  }
-}
-
-function getCachedNamedValue(
-  cache: Map<string, Promise<MealieNamedValue | null>>,
-  path: string,
-  name: string
-): Promise<MealieNamedValue | null> {
-  const key = normalizeLookupKey(name);
-  let pending = cache.get(key);
-  if (!pending) {
-    pending = lookupNamedValue(path, name).then((existing) => existing ?? createNamedValue(path, name));
-    cache.set(key, pending);
-  }
-  return pending;
-}
-
-async function resolveFood(food: MealieNamedValue | null): Promise<MealieNamedValue | null> {
-  if (!food?.name?.trim()) return null;
-  if (food.id) return { id: food.id, name: food.name };
-  return getCachedNamedValue(foodCache, "/api/foods", food.name.trim());
-}
-
-async function resolveUnit(unit: MealieNamedValue | null): Promise<MealieNamedValue | null> {
-  if (!unit?.name?.trim()) return null;
-  if (unit.id) return { id: unit.id, name: unit.name };
-  return getCachedNamedValue(unitCache, "/api/units", unit.name.trim());
-}
-
-async function parseIngredientLine(line: string): Promise<{
-  ingredient: MealieIngredientInput;
-  warning?: string;
-}> {
-  try {
-    const response = await mealieRequest<IngredientParserResponse>("POST", "/api/parser/ingredient", {
-      ingredient: line,
-    });
-
-    const parsedIngredient = response.ingredient;
-    if (!parsedIngredient) {
-      return {
-        ingredient: buildFallbackIngredient(line),
-        warning: `Ingredient parser returned no structured result for: ${line}`,
-      };
-    }
-
-    const ingredient: MealieIngredientInput = {
-      quantity:
-        typeof parsedIngredient.quantity === "number" && Number.isFinite(parsedIngredient.quantity)
-          ? parsedIngredient.quantity
-          : 0,
-      unit: parsedIngredient.unit?.name?.trim() ? { name: parsedIngredient.unit.name.trim() } : null,
-      food: parsedIngredient.food?.name?.trim() ? { name: parsedIngredient.food.name.trim() } : null,
-      note: parsedIngredient.note?.trim() || "",
-      display: parsedIngredient.display?.trim() || line,
-      title: null,
-      originalText: line,
-      referenceId: randomUUID(),
-    };
-
-    return {
-      ingredient,
-      warning: isWeakIngredientParse(ingredient, line, response.confidence)
-        ? `Ingredient parse may need review: ${line}`
-        : undefined,
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return {
-      ingredient: buildFallbackIngredient(line),
-      warning: `Ingredient parser failed for: ${line} (${message})`,
-    };
-  }
+function buildFallbackNote(
+  originalNote: string,
+  unresolvedFood: string | null,
+  unresolvedUnit: string | null,
+  quantity: number | null
+): string {
+  // When structured fields can't be resolved to Mealie IDs, preserve the
+  // full ingredient info inside the note so nothing is lost.
+  const parts: string[] = [];
+  if (quantity != null) parts.push(String(quantity));
+  if (unresolvedUnit) parts.push(unresolvedUnit);
+  if (unresolvedFood) parts.push(unresolvedFood);
+  if (originalNote) parts.push(originalNote);
+  return parts.join(" ").trim();
 }
 
 async function buildRecipeUrl(slug: string): Promise<string> {
   return `${config.mealieUrl}/g/home/r/${slug}`;
 }
+
+// -------------------------------------------------------------------------
+// Prepare recipe import payload
+//
+// Simplified flow:
+//   1. Take LLM-parsed ingredient (quantity, unit, food, note)
+//   2. Resolve food name -> Mealie food { id, name }
+//   3. Resolve unit name -> Mealie unit { id, name }
+//   4. If resolution fails, move unresolved info into note
+//   5. Send display: "" so Mealie auto-formats from structured fields
+// -------------------------------------------------------------------------
 
 export async function prepareRecipeImport(
   recipe: ParsedRecipe,
@@ -289,50 +261,66 @@ export async function prepareRecipeImport(
   const recipeIngredient: MealieIngredientInput[] = [];
 
   for (const ingredient of recipe.recipeIngredient) {
-    const line = normalizeIngredientLine(ingredient);
-    if (!line) continue;
+    const originalText = buildOriginalText(ingredient);
+    if (!originalText) continue;
 
-    const llmIngredient = buildLlmIngredient(line, ingredient);
-    const parsed = await parseIngredientLine(line);
-    const parserWeak = Boolean(parsed.warning);
+    const foodName = ingredient.food?.name?.trim() || null;
+    const unitName = ingredient.unit?.name?.trim() || null;
+    const quantity =
+      typeof ingredient.quantity === "number" && Number.isFinite(ingredient.quantity)
+        ? ingredient.quantity
+        : null;
+    const note = ingredient.note?.trim() || "";
 
-    const mergedIngredient: MealieIngredientInput = {
-      quantity: parsed.ingredient.quantity > 0 ? parsed.ingredient.quantity : llmIngredient.quantity,
-      unit: parsed.ingredient.unit ?? llmIngredient.unit,
-      food:
-        parsed.ingredient.food && !foodLooksUnparsed(parsed.ingredient.food.name, line, parsed.ingredient.unit?.name)
-          ? parsed.ingredient.food
-          : llmIngredient.food,
-      note: parsed.ingredient.note || llmIngredient.note,
-      display: line,
-      title: null,
-      originalText: line,
-      referenceId: randomUUID(),
-    };
+    // Resolve food and unit to Mealie ID-backed entities
+    const [resolvedFood, resolvedUnit] = await Promise.all([
+      resolveFood(foodName),
+      resolveUnit(unitName),
+    ]);
 
-    const resolvedUnit = await resolveUnit(mergedIngredient.unit);
-    const resolvedFood = await resolveFood(mergedIngredient.food);
+    const foodFailed = Boolean(foodName && !resolvedFood);
+    const unitFailed = Boolean(unitName && !resolvedUnit);
 
-    if (mergedIngredient.unit && !resolvedUnit) {
-      ingredientWarnings.push(`Could not resolve Mealie unit for "${line}". The unit field was left empty.`);
+    // If both food and unit resolution failed, preserve everything in note
+    // so the ingredient still shows meaningful text in Mealie.
+    let finalNote = note;
+    if (foodFailed || unitFailed) {
+      const unresolvedFood = foodFailed ? foodName : null;
+      const unresolvedUnit = unitFailed ? unitName : null;
+
+      // Only build fallback note if we'd otherwise lose data
+      if (foodFailed && unitFailed && !resolvedFood && !resolvedUnit) {
+        finalNote = buildFallbackNote(note, unresolvedFood, unresolvedUnit, quantity);
+      } else if (foodFailed) {
+        // Append unresolved food name to note
+        finalNote = [note, unresolvedFood].filter(Boolean).join(" — ");
+      } else if (unitFailed) {
+        // Append unresolved unit name to note
+        finalNote = [unresolvedUnit, note].filter(Boolean).join(" ");
+      }
     }
 
-    if (mergedIngredient.food && !resolvedFood) {
-      ingredientWarnings.push(`Could not resolve Mealie food for "${line}". The food field was left empty.`);
-    }
-
-    mergedIngredient.unit = resolvedUnit;
-    mergedIngredient.food = resolvedFood;
-
-    recipeIngredient.push(mergedIngredient);
-
-    if (parserWeak) {
+    if (foodFailed) {
       ingredientWarnings.push(
-        llmIngredient.food?.name || llmIngredient.unit?.name
-          ? `Mealie ingredient parser was weak for "${line}", so AI ingredient structure was used as fallback.`
-          : parsed.warning!
+        `Could not resolve food "${foodName}" for "${originalText}". Info preserved in note.`
       );
     }
+    if (unitFailed) {
+      ingredientWarnings.push(
+        `Could not resolve unit "${unitName}" for "${originalText}". Info preserved in note.`
+      );
+    }
+
+    recipeIngredient.push({
+      quantity: resolvedUnit || resolvedFood ? quantity : null,
+      unit: resolvedUnit,
+      food: resolvedFood,
+      note: finalNote,
+      display: "",          // Let Mealie auto-generate from structured fields
+      title: null,
+      originalText,
+      referenceId: randomUUID(),
+    });
   }
 
   const recipeInstructions: MealieInstructionInput[] = recipe.recipeInstructions.map((step) => ({

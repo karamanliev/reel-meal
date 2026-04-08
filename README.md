@@ -64,8 +64,24 @@ npm run dev
 - Frontend: `http://localhost:5173`
 - Backend: `http://localhost:3000`
 
+## Cookies (Instagram, etc.)
+
+Instagram and some other sites require authentication. The app supports passing cookies to `yt-dlp` automatically.
+
+**Setup:**
+
+1. Log into Instagram in your browser
+2. Export cookies using one of these methods:
+   - **Without extensions** — run `yt-dlp --cookies-from-browser chrome --cookies cookies.txt <any-instagram-url>` (replace `chrome` with `firefox`/`edge`/`chromium` as needed)
+   - **With a browser extension** — use something like "Get cookies.txt LOCALLY" and save the file
+3. Place the `cookies.txt` file in the project root — it's auto-detected on startup
+
+The server log will confirm: `yt-dlp cookies: /path/to/cookies.txt`
+
+The file is already in `.gitignore`. You can also set `YTDLP_COOKIES_FILE=/custom/path/cookies.txt` in `.env` to use a different location.
+
 ## Supported sources
 
 - YouTube (uses auto-captions when available, skipping audio download entirely)
-- Instagram Reels / posts
+- Instagram Reels / posts (requires cookies — see above)
 - Any source supported by yt-dlp

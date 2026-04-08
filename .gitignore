@@ -4,3 +4,4 @@ client/dist/
 dist/
 .env
 *.local
+cookies.txt

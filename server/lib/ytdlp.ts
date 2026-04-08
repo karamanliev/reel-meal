@@ -4,6 +4,7 @@ import { readFile, unlink, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtemp } from "node:fs/promises";
+import { config } from "./config.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -28,7 +29,10 @@ export interface AudioResult {
 }
 
 function ytdlp(args: string[]): Promise<{ stdout: string; stderr: string }> {
-  return execFileAsync("yt-dlp", args, { maxBuffer: 50 * 1024 * 1024 });
+  const finalArgs = config.ytdlpCookiesFile
+    ? ["--cookies", config.ytdlpCookiesFile, ...args]
+    : args;
+  return execFileAsync("yt-dlp", finalArgs, { maxBuffer: 50 * 1024 * 1024 });
 }
 
 function chooseBestTitle(data: Record<string, unknown>): string {

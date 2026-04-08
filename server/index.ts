@@ -61,6 +61,9 @@ console.log(
 );
 console.log(`[server] LLM model: ${config.openaiModel}`);
 console.log(`[server] Transcription model: ${config.transcriptionModel}`);
+console.log(
+  `[server] yt-dlp cookies: ${config.ytdlpCookiesFile ? config.ytdlpCookiesFile : "not configured"}`
+);
 
 serve({
   fetch: app.fetch,

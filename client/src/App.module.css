@@ -124,18 +124,26 @@
 }
 
 /* -------------------------------------------------------------------------
-   Translate toggle
+   Checkbox options row
    ------------------------------------------------------------------------- */
+
+.checkboxRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1.5rem;
+  margin-top: 0.75rem;
+}
 
 .toggle {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
-  margin-top: 0.6rem;
   font-size: 0.875rem;
   color: #888;
   cursor: pointer;
   user-select: none;
+  padding: 0.25rem 0;
 }
 
 .toggle input[type="checkbox"] {
