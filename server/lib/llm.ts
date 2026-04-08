@@ -6,6 +6,7 @@ import { config } from "./config.js";
 // -------------------------------------------------------------------------
 
 export interface RecipeIngredient {
+  title?: string | null;
   quantity?: number | null;
   unit?: { name: string } | null;
   food?: { name: string } | null;
@@ -14,7 +15,7 @@ export interface RecipeIngredient {
 }
 
 export interface RecipeInstruction {
-  title?: string;
+  title?: string | null;
   text: string;
 }
 
@@ -39,8 +40,8 @@ export interface RecipeTag {
 export interface ParsedRecipe {
   name: string;
   description: string;
-  recipeServings?: number;
-  prepTime?: string;     // ISO 8601 duration e.g. "PT20M"
+  recipeServings?: number | null;
+  prepTime?: string | null;
   cookTime?: string;
   totalTime?: string;
   recipeIngredient: RecipeIngredient[];
@@ -63,11 +64,12 @@ Schema:
   "name": "string — recipe name",
   "description": "string — short 1-2 sentence description",
   "recipeServings": number or null,
-  "prepTime": "ISO 8601 duration string e.g. PT15M, or null",
-  "cookTime": "ISO 8601 duration string e.g. PT30M, or null",
-  "totalTime": "ISO 8601 duration string e.g. PT45M, or null",
+  "prepTime": "human-readable duration string like '15 minutes' or '1 hour 30 minutes', or null",
+  "cookTime": "human-readable duration string like '30 minutes', or null",
+  "totalTime": "human-readable duration string like '45 minutes' or '18 hours 40 minutes', or null",
   "recipeIngredient": [
     {
+      "title": "string or null — section title ONLY on the first ingredient of an explicitly named group like 'Poolish' or 'Dough'",
       "quantity": number or null,
       "unit": { "name": "string" } or null,
       "food": { "name": "string" } or null,
@@ -95,12 +97,24 @@ Schema:
 }
 
 Rules:
-- Use ISO 8601 duration format for times (PT15M = 15 minutes, PT1H30M = 1 hour 30 minutes).
+- Use human-readable duration strings for times, such as "15 minutes", "35 min", or "1 hour 30 minutes".
 - If a value is not mentioned, use null (not empty string, not 0).
-- Keep instruction steps atomic — one action per step.
+- Only include recipeServings if the source EXPLICITLY states servings. Do not infer it.
+- Prefer fewer, more meaningful instruction steps over many tiny ones.
+  - Combine consecutive actions that naturally belong together in real cooking.
+  - Usually a normal recipe should land around 6-10 steps, but adapt to recipe complexity.
+  - Do NOT split trivial motions into separate steps.
+  - Keep a separate step only when the transition is meaningfully distinct in the source.
 - Choose appropriate categories (e.g. "Dinner", "Breakfast", "Dessert", "Soup") and tags (e.g. "Italian", "Vegetarian", "Quick", "Gluten-Free").
-- If nutrition info is not mentioned, omit the nutrition field entirely.
+- If nutrition info is not explicitly mentioned, omit the nutrition field entirely.
 - The transcript may be noisy — use the description and title to fill gaps.
+
+Grouping rules:
+- Create ingredient or instruction section titles ONLY when the source explicitly names distinct recipe components or phases, such as "Poolish", "Dough", "Sauce", "Filling", "Meat", or "Assembly".
+- Do NOT invent groups for ordinary recipes that do not clearly need them.
+- Preserve only what is explicit: if only ingredients are grouped, only group ingredients; if only instructions are grouped, only group instructions.
+- For a grouped section, set "title" ONLY on the first ingredient or first instruction in that section.
+- All following items in the same section must use "title": null.
 
 Ingredient parsing rules — these are CRITICAL for correct import:
 - Each ingredient MUST be split into exactly these fields: quantity, unit, food, note.

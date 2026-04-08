@@ -204,6 +204,7 @@ parseRouter.get("/api/parse", async (c) => {
           webpageUrl: metadata.webpageUrl,
           thumbnailSourceUrl: metadata.thumbnailUrl,
           hasSubtitles: metadata.hasSubtitles,
+          subtitleLanguage: metadata.subtitleLanguage,
         },
       });
 
@@ -234,10 +235,12 @@ parseRouter.get("/api/parse", async (c) => {
         await emit({
           step: "transcript",
           status: "loading",
-          message: "Extracting subtitles...",
+          message: "Extracting manual subtitles...",
         });
 
-        const subs = await extractSubtitles(url);
+        const subs = metadata.subtitleLanguage
+          ? await extractSubtitles(url, metadata.subtitleLanguage)
+          : null;
 
         if (subs) {
           transcript = subs.text;
@@ -246,19 +249,19 @@ parseRouter.get("/api/parse", async (c) => {
           await emit({
             step: "transcript",
             status: "done",
-            message: "Subtitles extracted.",
+            message: "Manual subtitles extracted.",
             data: {
               transcript,
               source: transcriptSource,
             },
           });
         } else {
-          // Subtitles reported but extraction failed — fall through to audio
-          console.log("[parse] Subtitle extraction returned nothing, downloading audio...");
+          // Suitable manual subtitles were reported but extraction failed — fall through to audio
+          console.log("[parse] Manual subtitle extraction returned nothing, downloading audio...");
           await emit({
             step: "transcript",
             status: "loading",
-            message: "Subtitles unavailable, downloading audio...",
+            message: "Suitable subtitles unavailable, downloading audio...",
           });
 
           const audioResult = await downloadAudio(url);

@@ -15,11 +15,35 @@ function headers(extra: Record<string, string> = {}): Record<string, string> {
   };
 }
 
-function toIsoDurationOrNull(value?: string): string | null {
+function humanizeIsoDuration(value: string): string {
+  const trimmed = value.trim();
+  const match = trimmed.match(
+    /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$/i
+  );
+  if (!match) return trimmed;
+
+  const [, daysText, hoursText, minutesText, secondsText] = match;
+  const days = daysText ? Number(daysText) : 0;
+  const hours = hoursText ? Number(hoursText) : 0;
+  const minutes = minutesText ? Number(minutesText) : 0;
+  const seconds = secondsText ? Math.round(Number(secondsText)) : 0;
+
+  const parts: string[] = [];
+  if (days) parts.push(`${days} day${days === 1 ? "" : "s"}`);
+  if (hours) parts.push(`${hours} hour${hours === 1 ? "" : "s"}`);
+  if (minutes) parts.push(`${minutes} minute${minutes === 1 ? "" : "s"}`);
+  if (seconds && parts.length === 0) parts.push(`${seconds} second${seconds === 1 ? "" : "s"}`);
+
+  return parts.join(" ") || trimmed;
+}
+
+function normalizeRecipeTime(value?: string | null): string | null {
   if (!value) return null;
   const trimmed = value.trim();
+  if (!trimmed) return null;
+
   const isoDurationPattern = /^P(?=.+)(?:\d+Y)?(?:\d+M)?(?:\d+W)?(?:\d+D)?(?:T(?:\d+H)?(?:\d+M)?(?:\d+(?:\.\d+)?S)?)?$/i;
-  return isoDurationPattern.test(trimmed) ? trimmed.toUpperCase() : null;
+  return isoDurationPattern.test(trimmed) ? humanizeIsoDuration(trimmed) : trimmed;
 }
 
 async function mealieRequest<T>(
@@ -97,7 +121,7 @@ interface MealieInstructionInput {
 export interface RecipeImportPayload {
   name: string;
   description: string;
-  recipeServings: number;
+  recipeServings?: number | null;
   prepTime: string | null;
   cookTime: string | null;
   totalTime: string | null;
@@ -317,11 +341,16 @@ export async function prepareRecipeImport(
       food: resolvedFood,
       note: finalNote,
       display: "",          // Let Mealie auto-generate from structured fields
-      title: null,
+      title: ingredient.title?.trim() || null,
       originalText,
       referenceId: randomUUID(),
     });
   }
+
+  const recipeServings =
+    typeof recipe.recipeServings === "number" && Number.isFinite(recipe.recipeServings)
+      ? recipe.recipeServings
+      : null;
 
   const recipeInstructions: MealieInstructionInput[] = recipe.recipeInstructions.map((step) => ({
     id: randomUUID(),
@@ -335,10 +364,10 @@ export async function prepareRecipeImport(
     payload: {
       name: recipe.name,
       description: recipe.description,
-      recipeServings: recipe.recipeServings ?? 0,
-      prepTime: toIsoDurationOrNull(recipe.prepTime),
-      cookTime: toIsoDurationOrNull(recipe.cookTime),
-      totalTime: toIsoDurationOrNull(recipe.totalTime),
+      ...(recipeServings != null ? { recipeServings } : {}),
+      prepTime: normalizeRecipeTime(recipe.prepTime),
+      cookTime: normalizeRecipeTime(recipe.cookTime),
+      totalTime: normalizeRecipeTime(recipe.totalTime),
       recipeIngredient,
       recipeInstructions,
       recipeCategory: [],

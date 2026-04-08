@@ -336,6 +336,82 @@
   background: rgba(245, 158, 11, 0.08);
 }
 
+.previewSection {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.previewSubsection {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.factGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 0.5rem;
+}
+
+.factCard {
+  display: grid;
+  gap: 0.18rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid #303646;
+  border-radius: 0.45rem;
+  background: #121722;
+}
+
+.factValue {
+  font-size: 0.98rem;
+  font-weight: 700;
+  color: #f3f6fc;
+}
+
+.factLabel {
+  font-size: 0.72rem;
+  color: #93a0b8;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.previewList {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.previewListItem {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.55rem 0.6rem;
+  border: 1px solid #2b3140;
+  border-radius: 0.4rem;
+  background: #11161f;
+}
+
+.previewSectionTitle {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #f1f5fb;
+}
+
+.previewItemLabel {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #93a0b8;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.previewItemText {
+  margin: 0;
+  font-size: 0.84rem;
+  line-height: 1.45;
+  color: #d8deea;
+  overflow-wrap: anywhere;
+}
+
 .diffSummaryGrid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));

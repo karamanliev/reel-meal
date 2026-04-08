@@ -22,6 +22,7 @@ interface SSEEvent {
     webpageUrl?: string;
     thumbnailSourceUrl?: string;
     hasSubtitles?: boolean;
+    subtitleLanguage?: string;
     transcript?: string;
     source?: "subtitles" | "audio";
     parsedRecipe?: unknown;
@@ -45,6 +46,7 @@ interface MetadataDetails {
   webpageUrl?: string;
   thumbnailSourceUrl?: string;
   hasSubtitles?: boolean;
+  subtitleLanguage?: string;
 }
 
 interface TranscriptDetails {
@@ -75,6 +77,16 @@ interface ParsingDiff {
   ingredientChanges: IngredientDiff[];
 }
 
+interface RecipeFact {
+  label: string;
+  value: string;
+}
+
+interface NutritionEntry {
+  label: string;
+  value: string;
+}
+
 const STEPS: { id: StepName; label: string }[] = [
   { id: "metadata", label: "Fetching video info" },
   { id: "transcript", label: "Extracting transcript" },
@@ -98,9 +110,142 @@ function normalizeEmptyText(value: unknown): string {
   return value.trim();
 }
 
+function normalizeComparableValue(value: unknown): unknown {
+  if (value == null) return null;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed || null;
+  }
+  return value;
+}
+
+function formatNumber(value: number): string {
+  return Number.isInteger(value) ? String(value) : String(value);
+}
+
+function humanizeIsoDuration(value: string): string {
+  const trimmed = value.trim();
+  const match = trimmed.match(
+    /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$/i
+  );
+  if (!match) return trimmed;
+
+  const [, daysText, hoursText, minutesText, secondsText] = match;
+  const days = daysText ? Number(daysText) : 0;
+  const hours = hoursText ? Number(hoursText) : 0;
+  const minutes = minutesText ? Number(minutesText) : 0;
+  const seconds = secondsText ? Math.round(Number(secondsText)) : 0;
+
+  const parts: string[] = [];
+  if (days) parts.push(`${days} day${days === 1 ? "" : "s"}`);
+  if (hours) parts.push(`${hours} hr`);
+  if (minutes) parts.push(`${minutes} min`);
+  if (seconds && parts.length === 0) parts.push(`${seconds} sec`);
+
+  return parts.join(" ") || trimmed;
+}
+
+function formatVideoDuration(value: number): string {
+  const totalSeconds = Math.max(0, Math.round(value));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const parts: string[] = [];
+
+  if (hours) parts.push(`${hours} hr`);
+  if (minutes) parts.push(`${minutes} min`);
+  if (seconds && hours === 0) parts.push(`${seconds} sec`);
+
+  return parts.join(" ") || "0 sec";
+}
+
+function formatTimeValue(value: unknown): string {
+  return typeof value === "string" && value.trim() ? humanizeIsoDuration(value) : "";
+}
+
+function getInstructions(value: unknown): Record<string, unknown>[] {
+  if (!isRecord(value) || !Array.isArray(value.recipeInstructions)) return [];
+  return value.recipeInstructions.filter(isRecord);
+}
+
+function hasMeaningfulValue(value: unknown): boolean {
+  if (value == null) return false;
+  if (typeof value === "string") return value.trim().length > 0;
+  return true;
+}
+
+function pickPreferredValue(primary: unknown, fallback: unknown): unknown {
+  return hasMeaningfulValue(primary) ? primary : fallback;
+}
+
+function formatIngredientPreview(ingredient: Record<string, unknown>): string {
+  const display = normalizeEmptyText(ingredient.display);
+  if (display) return display;
+
+  const parts = [
+    typeof ingredient.quantity === "number" ? formatNumber(ingredient.quantity) : "",
+    getNamedValue(ingredient.unit).name,
+    getNamedValue(ingredient.food).name,
+    normalizeEmptyText(ingredient.note),
+  ].filter(Boolean);
+
+  return parts.join(" ") || normalizeEmptyText(ingredient.originalText) || "Ingredient";
+}
+
+function getSectionTitle(value: unknown): string {
+  return normalizeEmptyText(isRecord(value) ? value.title : value);
+}
+
+function buildRecipeFacts(details: ParsingDetails): RecipeFact[] {
+  const parsedRecipe = isRecord(details.parsedRecipe) ? details.parsedRecipe : {};
+  const importPayload = isRecord(details.importPayload) ? details.importPayload : {};
+
+  const facts: RecipeFact[] = [];
+  const recipeServings = pickPreferredValue(importPayload.recipeServings, parsedRecipe.recipeServings);
+  const prepTime = pickPreferredValue(importPayload.prepTime, parsedRecipe.prepTime);
+  const cookTime = pickPreferredValue(importPayload.cookTime, parsedRecipe.cookTime);
+  const totalTime = pickPreferredValue(importPayload.totalTime, parsedRecipe.totalTime);
+
+  if (typeof recipeServings === "number") {
+    facts.push({ label: "Servings", value: formatNumber(recipeServings) });
+  }
+
+  const prepTimeValue = formatTimeValue(prepTime);
+  if (prepTimeValue) facts.push({ label: "Prep time", value: prepTimeValue });
+
+  const cookTimeValue = formatTimeValue(cookTime);
+  if (cookTimeValue) facts.push({ label: "Cook time", value: cookTimeValue });
+
+  const totalTimeValue = formatTimeValue(totalTime);
+  if (totalTimeValue) facts.push({ label: "Total time", value: totalTimeValue });
+
+  return facts;
+}
+
+function getNutritionEntries(details: ParsingDetails): NutritionEntry[] {
+  const parsedRecipe = isRecord(details.parsedRecipe) ? details.parsedRecipe : {};
+  const importPayload = isRecord(details.importPayload) ? details.importPayload : {};
+  const nutrition = pickPreferredValue(importPayload.nutrition, parsedRecipe.nutrition);
+  if (!isRecord(nutrition)) return [];
+
+  const fields: Array<[key: string, label: string]> = [
+    ["calories", "Calories"],
+    ["proteinContent", "Protein"],
+    ["fatContent", "Fat"],
+    ["carbohydrateContent", "Carbs"],
+    ["fiberContent", "Fiber"],
+    ["sugarContent", "Sugar"],
+    ["sodiumContent", "Sodium"],
+  ];
+
+  return fields
+    .map(([key, label]) => ({ label, value: normalizeEmptyText(nutrition[key]) }))
+    .filter((entry) => entry.value);
+}
+
 function formatDiffValue(value: unknown): string {
-  if (value == null) return "null";
-  if (typeof value === "string") return value || "empty";
+  if (value == null) return "not set";
+  if (typeof value === "string") return value.trim() || "not set";
   if (typeof value === "number" || typeof value === "boolean") return String(value);
   try {
     return JSON.stringify(value);
@@ -123,7 +268,7 @@ function getIngredients(value: unknown): Record<string, unknown>[] {
 }
 
 function sameJson(a: unknown, b: unknown): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
+  return JSON.stringify(normalizeComparableValue(a)) === JSON.stringify(normalizeComparableValue(b));
 }
 
 function buildParsingDiff(details: ParsingDetails): ParsingDiff {
@@ -133,6 +278,9 @@ function buildParsingDiff(details: ParsingDetails): ParsingDiff {
   const recipeChanges: DiffEntry[] = [];
   const recipeFields: Array<[key: string, label: string]> = [
     ["recipeServings", "Servings"],
+    ["prepTime", "Prep time"],
+    ["cookTime", "Cook time"],
+    ["totalTime", "Total time"],
     ["recipeCategory", "Categories"],
     ["tags", "Tags"],
     ["nutrition", "Nutrition"],
@@ -143,10 +291,11 @@ function buildParsingDiff(details: ParsingDetails): ParsingDiff {
     const before = parsedRecipe[key];
     const after = importPayload[key];
     if (!sameJson(before, after)) {
+      const isTimeField = key === "prepTime" || key === "cookTime" || key === "totalTime";
       recipeChanges.push({
         label,
-        before: formatDiffValue(before),
-        after: formatDiffValue(after),
+        before: isTimeField ? formatTimeValue(before) || "not set" : formatDiffValue(before),
+        after: isTimeField ? formatTimeValue(after) || "not set" : formatDiffValue(after),
       });
     }
   }
@@ -328,6 +477,7 @@ export default function App() {
               webpageUrl: msg.data.webpageUrl,
               thumbnailSourceUrl: msg.data.thumbnailSourceUrl,
               hasSubtitles: msg.data.hasSubtitles,
+              subtitleLanguage: msg.data.subtitleLanguage,
             });
           }
         }
@@ -455,6 +605,10 @@ export default function App() {
 
   const isLoading = phase === "loading";
   const parsingDiff = parsingDetails ? buildParsingDiff(parsingDetails) : null;
+  const recipeFacts = parsingDetails ? buildRecipeFacts(parsingDetails) : [];
+  const nutritionEntries = parsingDetails ? getNutritionEntries(parsingDetails) : [];
+  const previewIngredients = parsingDetails ? getIngredients(parsingDetails.importPayload) : [];
+  const previewInstructions = parsingDetails ? getInstructions(parsingDetails.importPayload) : [];
   const showDiffView = Boolean(recipeUrl);
   const showImportPreview = phase === "review" && Boolean(parsingDetails) && !recipeUrl;
   const showManualImportPanel = phase === "review" && Boolean(parsingDetails) && !recipeUrl;
@@ -584,9 +738,15 @@ export default function App() {
                           <p><strong>Title:</strong> {metadataDetails.title}</p>
                           {metadataDetails.uploader && <p><strong>Uploader:</strong> {metadataDetails.uploader}</p>}
                           {typeof metadataDetails.duration === "number" && (
-                            <p><strong>Duration:</strong> {Math.round(metadataDetails.duration)}s</p>
+                            <p><strong>Duration:</strong> {formatVideoDuration(metadataDetails.duration)}</p>
                           )}
-                          <p><strong>Subtitles available:</strong> {metadataDetails.hasSubtitles ? "Yes" : "No"}</p>
+                          <p>
+                            <strong>Manual same-language subtitles:</strong>{" "}
+                            {metadataDetails.hasSubtitles ? "Yes" : "No"}
+                          </p>
+                          {metadataDetails.subtitleLanguage && (
+                            <p><strong>Subtitle language:</strong> {metadataDetails.subtitleLanguage}</p>
+                          )}
                           {metadataDetails.webpageUrl && (
                             <p><strong>Video URL:</strong> {metadataDetails.webpageUrl}</p>
                           )}
@@ -629,6 +789,86 @@ export default function App() {
                               ))}
                             </div>
                           )}
+
+                          {(recipeFacts.length > 0 || nutritionEntries.length > 0) && (
+                            <div className={styles.previewSection}>
+                              <p><strong>Recipe details</strong></p>
+                              {recipeFacts.length > 0 && (
+                                <div className={styles.factGrid}>
+                                  {recipeFacts.map((fact) => (
+                                    <div key={fact.label} className={styles.factCard}>
+                                      <span className={styles.factValue}>{fact.value}</span>
+                                      <span className={styles.factLabel}>{fact.label}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                              {nutritionEntries.length > 0 && (
+                                <div className={styles.previewSubsection}>
+                                  <p><strong>Nutrition</strong></p>
+                                  <div className={styles.factGrid}>
+                                    {nutritionEntries.map((entry) => (
+                                      <div key={entry.label} className={styles.factCard}>
+                                        <span className={styles.factValue}>{entry.value}</span>
+                                        <span className={styles.factLabel}>{entry.label}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {previewIngredients.length > 0 && (
+                            <div className={styles.previewSection}>
+                              <p><strong>Ingredients preview</strong></p>
+                              <div className={styles.previewList}>
+                                {previewIngredients.map((ingredient, index) => {
+                                  const sectionTitle = getSectionTitle(ingredient);
+                                  return (
+                                    <div
+                                      key={`ingredient-preview-${index}`}
+                                      className={styles.previewListItem}
+                                    >
+                                      {sectionTitle && (
+                                        <p className={styles.previewSectionTitle}>{sectionTitle}</p>
+                                      )}
+                                      <p className={styles.previewItemText}>
+                                        {formatIngredientPreview(ingredient)}
+                                      </p>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+
+                          {previewInstructions.length > 0 && (
+                            <div className={styles.previewSection}>
+                              <p><strong>Instructions preview</strong></p>
+                              <div className={styles.previewList}>
+                                {previewInstructions.map((instruction, index) => {
+                                  const sectionTitle = getSectionTitle(instruction);
+                                  const instructionText = normalizeEmptyText(instruction.text);
+                                  if (!instructionText) return null;
+
+                                  return (
+                                    <div
+                                      key={`instruction-preview-${index}`}
+                                      className={styles.previewListItem}
+                                    >
+                                      {sectionTitle && (
+                                        <p className={styles.previewSectionTitle}>{sectionTitle}</p>
+                                      )}
+                                      <p className={styles.previewItemLabel}>Step {index + 1}</p>
+                                      <p className={styles.previewItemText}>{instructionText}</p>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+
                           {showImportPreview && (
                             <>
                               <p><strong>Mealie import preview</strong></p>

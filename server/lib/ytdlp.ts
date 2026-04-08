@@ -16,11 +16,68 @@ export interface VideoMetadata {
   uploader: string;
   webpageUrl: string;
   hasSubtitles: boolean;
+  subtitleLanguage: string | null;
 }
 
 export interface SubtitleResult {
   text: string;
   source: "subtitles";
+}
+
+function getSubtitleLanguages(value: unknown): string[] {
+  if (!value || typeof value !== "object") return [];
+
+  return Object.entries(value as Record<string, unknown>)
+    .filter(([, formats]) => Array.isArray(formats) && formats.length > 0)
+    .map(([language]) => language)
+    .filter(Boolean);
+}
+
+function expandLanguageVariants(code: string): string[] {
+  const normalized = code.trim().toLowerCase().replace(/_/g, "-");
+  if (!normalized) return [];
+
+  const variants = new Set<string>();
+  const withoutSuffix = normalized.replace(/-(orig|auto)$/i, "");
+  variants.add(normalized);
+  variants.add(withoutSuffix);
+
+  const primary = withoutSuffix.split("-")[0];
+  if (primary) variants.add(primary);
+
+  return [...variants].filter(Boolean);
+}
+
+function findMatchingSubtitleLanguage(
+  availableLanguages: string[],
+  preferredLanguage: string | null
+): string | null {
+  if (!preferredLanguage) return null;
+
+  const preferredVariants = new Set(expandLanguageVariants(preferredLanguage));
+  for (const language of availableLanguages) {
+    const languageVariants = expandLanguageVariants(language);
+    if (languageVariants.some((variant) => preferredVariants.has(variant))) {
+      return language;
+    }
+  }
+
+  return null;
+}
+
+function selectManualSubtitleLanguage(data: Record<string, unknown>): string | null {
+  const manualSubtitleLanguages = getSubtitleLanguages(data.subtitles);
+  if (manualSubtitleLanguages.length === 0) return null;
+
+  const languageCandidates = [data.language, data.release_language, data.language_preference]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+
+  for (const candidate of languageCandidates) {
+    const matchedLanguage = findMatchingSubtitleLanguage(manualSubtitleLanguages, candidate);
+    if (matchedLanguage) return matchedLanguage;
+  }
+
+  return null;
 }
 
 export interface AudioResult {
@@ -88,10 +145,7 @@ export async function fetchMetadata(url: string): Promise<VideoMetadata> {
         data.thumbnails[data.thumbnails.length - 1]?.url
       : null);
 
-  // Check if subtitles are available (auto-generated or manual)
-  const hasSubtitles =
-    (data.subtitles && Object.keys(data.subtitles).length > 0) ||
-    (data.automatic_captions && Object.keys(data.automatic_captions).length > 0);
+  const subtitleLanguage = selectManualSubtitleLanguage(data);
 
   return {
     title: chooseBestTitle(data),
@@ -100,24 +154,27 @@ export async function fetchMetadata(url: string): Promise<VideoMetadata> {
     duration: data.duration || 0,
     uploader: data.uploader || data.channel || "",
     webpageUrl: data.webpage_url || url,
-    hasSubtitles: Boolean(hasSubtitles),
+    hasSubtitles: Boolean(subtitleLanguage),
+    subtitleLanguage,
   };
 }
 
 /**
- * Try to extract subtitles/captions from a video (YouTube auto-captions, etc.)
+ * Try to extract manually provided subtitles in the same language as the video
  * without downloading the video itself.
- * Returns null if no subtitles are available.
+ * Returns null if no suitable manual subtitles are available.
  */
-export async function extractSubtitles(url: string): Promise<SubtitleResult | null> {
+export async function extractSubtitles(
+  url: string,
+  subtitleLanguage: string
+): Promise<SubtitleResult | null> {
   const workDir = await mkdtemp(join(tmpdir(), "recipe-subs-"));
 
   try {
     await ytdlp([
       "--skip-download",
-      "--write-auto-subs",
       "--write-subs",
-      "--sub-langs", "en.*,en",
+      "--sub-langs", subtitleLanguage,
       "--sub-format", "vtt/srt/best",
       "--convert-subs", "vtt",
       "--no-playlist",
@@ -138,7 +195,7 @@ export async function extractSubtitles(url: string): Promise<SubtitleResult | nu
 
     return { text, source: "subtitles" };
   } catch {
-    // No subtitles available or yt-dlp error
+    // No suitable manual subtitles available or yt-dlp error
     return null;
   } finally {
     await rm(workDir, { recursive: true, force: true });
