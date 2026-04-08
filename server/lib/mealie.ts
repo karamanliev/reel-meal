@@ -8,6 +8,14 @@ import type { ParsedRecipe, RecipeIngredient } from "./llm.js";
 // Mealie API client
 // -------------------------------------------------------------------------
 
+const IMAGE_MIME_TYPES: Record<string, string> = {
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  png: "image/png",
+  webp: "image/webp",
+  gif: "image/gif",
+};
+
 function headers(extra: Record<string, string> = {}): Record<string, string> {
   return {
     Authorization: `Bearer ${config.mealieApiToken}`,
@@ -286,65 +294,57 @@ async function buildRecipeUrl(slug: string): Promise<string> {
 //   5. Send display: "" so Mealie auto-formats from structured fields
 // -------------------------------------------------------------------------
 
-export async function prepareRecipeImport(
-  recipe: ParsedRecipe,
-  originalUrl: string
-): Promise<PreparedRecipeImport> {
-  const ingredientWarnings: string[] = [];
-  const recipeIngredient: MealieIngredientInput[] = [];
+interface PreparedIngredient {
+  input: MealieIngredientInput;
+  warnings: string[];
+}
 
-  for (const ingredient of recipe.recipeIngredient) {
-    const originalText = buildOriginalText(ingredient);
-    if (!originalText) continue;
+async function prepareIngredient(ingredient: RecipeIngredient): Promise<PreparedIngredient | null> {
+  const originalText = buildOriginalText(ingredient);
+  if (!originalText) return null;
 
-    const foodName = ingredient.food?.name?.trim() || null;
-    const unitName = ingredient.unit?.name?.trim() || null;
-    const quantity =
-      typeof ingredient.quantity === "number" && Number.isFinite(ingredient.quantity)
-        ? ingredient.quantity
-        : null;
-    const note = ingredient.note?.trim() || "";
+  const foodName = ingredient.food?.name?.trim() || null;
+  const unitName = ingredient.unit?.name?.trim() || null;
+  const quantity =
+    typeof ingredient.quantity === "number" && Number.isFinite(ingredient.quantity)
+      ? ingredient.quantity
+      : null;
+  const note = ingredient.note?.trim() || "";
 
-    // Resolve food and unit to Mealie ID-backed entities
-    const [resolvedFood, resolvedUnit] = await Promise.all([
-      resolveFood(foodName),
-      resolveUnit(unitName),
-    ]);
+  // Resolve food and unit to Mealie ID-backed entities
+  const [resolvedFood, resolvedUnit] = await Promise.all([
+    resolveFood(foodName),
+    resolveUnit(unitName),
+  ]);
 
-    const foodFailed = Boolean(foodName && !resolvedFood);
-    const unitFailed = Boolean(unitName && !resolvedUnit);
+  const foodFailed = Boolean(foodName && !resolvedFood);
+  const unitFailed = Boolean(unitName && !resolvedUnit);
 
-    // If both food and unit resolution failed, preserve everything in note
-    // so the ingredient still shows meaningful text in Mealie.
-    let finalNote = note;
-    if (foodFailed || unitFailed) {
-      const unresolvedFood = foodFailed ? foodName : null;
-      const unresolvedUnit = unitFailed ? unitName : null;
+  // When structured fields can't be resolved to Mealie IDs, preserve the
+  // full ingredient info inside the note so nothing is lost.
+  let finalNote = note;
+  if (foodFailed && unitFailed) {
+    finalNote = buildFallbackNote(note, foodName, unitName, quantity);
+  } else if (foodFailed) {
+    finalNote = [note, foodName].filter(Boolean).join(" — ");
+  } else if (unitFailed) {
+    finalNote = [unitName, note].filter(Boolean).join(" ");
+  }
 
-      // Only build fallback note if we'd otherwise lose data
-      if (foodFailed && unitFailed && !resolvedFood && !resolvedUnit) {
-        finalNote = buildFallbackNote(note, unresolvedFood, unresolvedUnit, quantity);
-      } else if (foodFailed) {
-        // Append unresolved food name to note
-        finalNote = [note, unresolvedFood].filter(Boolean).join(" — ");
-      } else if (unitFailed) {
-        // Append unresolved unit name to note
-        finalNote = [unresolvedUnit, note].filter(Boolean).join(" ");
-      }
-    }
+  const warnings: string[] = [];
+  if (foodFailed) {
+    warnings.push(
+      `Could not resolve food "${foodName}" for "${originalText}". Info preserved in note.`
+    );
+  }
+  if (unitFailed) {
+    warnings.push(
+      `Could not resolve unit "${unitName}" for "${originalText}". Info preserved in note.`
+    );
+  }
 
-    if (foodFailed) {
-      ingredientWarnings.push(
-        `Could not resolve food "${foodName}" for "${originalText}". Info preserved in note.`
-      );
-    }
-    if (unitFailed) {
-      ingredientWarnings.push(
-        `Could not resolve unit "${unitName}" for "${originalText}". Info preserved in note.`
-      );
-    }
-
-    recipeIngredient.push({
+  return {
+    input: {
       quantity: resolvedUnit || resolvedFood ? quantity : null,
       unit: resolvedUnit,
       food: resolvedFood,
@@ -353,7 +353,24 @@ export async function prepareRecipeImport(
       title: ingredient.title?.trim() || null,
       originalText,
       referenceId: randomUUID(),
-    });
+    },
+    warnings,
+  };
+}
+
+export async function prepareRecipeImport(
+  recipe: ParsedRecipe,
+  originalUrl: string
+): Promise<PreparedRecipeImport> {
+  const ingredientWarnings: string[] = [];
+  const recipeIngredient: MealieIngredientInput[] = [];
+
+  for (const ingredient of recipe.recipeIngredient) {
+    const prepared = await prepareIngredient(ingredient);
+    if (!prepared) continue;
+
+    recipeIngredient.push(prepared.input);
+    ingredientWarnings.push(...prepared.warnings);
   }
 
   const recipeServings =
@@ -392,14 +409,27 @@ export async function prepareRecipeImport(
 // Step 1: Create a recipe shell (just the name)
 // -------------------------------------------------------------------------
 
-interface CreateRecipeResponse {
-  // Mealie returns just the slug string for POST /api/recipes
-  // but the actual response might vary — handle both
-  slug?: string;
+/**
+ * Parse the slug from Mealie's POST /api/recipes response.
+ * Mealie may return a bare JSON string, a JSON object with `slug`, or a plain
+ * unquoted string depending on version.
+ */
+function parseSlugResponse(text: string): string {
+  try {
+    const parsed = JSON.parse(text);
+    if (typeof parsed === "string") return parsed;
+    if (typeof parsed === "object" && parsed !== null && typeof parsed.slug === "string") {
+      return parsed.slug;
+    }
+  } catch {
+    // text might be a plain string without quotes
+    return text.trim().replace(/^"|"$/g, "");
+  }
+
+  throw new Error(`Unexpected response from Mealie create recipe: ${text}`);
 }
 
 export async function createRecipeShell(name: string): Promise<string> {
-  // POST /api/recipes returns the slug as a plain string (not JSON object in some versions)
   const url = `${config.mealieUrl}/api/recipes`;
   const res = await fetch(url, {
     method: "POST",
@@ -412,21 +442,7 @@ export async function createRecipeShell(name: string): Promise<string> {
     throw new Error(`Mealie create recipe → ${res.status} ${res.statusText}: ${text}`);
   }
 
-  const text = await res.text();
-
-  // Mealie returns the slug as a bare JSON string: "my-recipe-slug"
-  try {
-    const parsed = JSON.parse(text);
-    if (typeof parsed === "string") return parsed;
-    if (typeof parsed === "object" && parsed !== null && "slug" in parsed) {
-      return (parsed as CreateRecipeResponse).slug!;
-    }
-  } catch {
-    // text might be a plain string without quotes
-    return text.trim().replace(/^"|"$/g, "");
-  }
-
-  throw new Error(`Unexpected response from Mealie create recipe: ${text}`);
+  return parseSlugResponse(await res.text());
 }
 
 // -------------------------------------------------------------------------
@@ -444,14 +460,7 @@ export async function uploadRecipeImage(
 
   // Determine MIME type from extension
   const ext = fileName.split(".").pop()?.toLowerCase() ?? "jpg";
-  const mimeMap: Record<string, string> = {
-    jpg: "image/jpeg",
-    jpeg: "image/jpeg",
-    png: "image/png",
-    webp: "image/webp",
-    gif: "image/gif",
-  };
-  const mimeType = mimeMap[ext] ?? "image/jpeg";
+  const mimeType = IMAGE_MIME_TYPES[ext] ?? "image/jpeg";
 
   const formData = new FormData();
   formData.append("image", new Blob([imageBuffer], { type: mimeType }), fileName);

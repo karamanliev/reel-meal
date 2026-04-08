@@ -4,9 +4,10 @@
 
 body {
   margin: 0;
-  background: #0f1117;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 #root {
-  min-height: 100vh;
+  min-height: 100dvh;
 }

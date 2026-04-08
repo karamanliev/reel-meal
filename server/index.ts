@@ -36,17 +36,10 @@ app.get("/api/health", (c) => c.json({ status: "ok", timestamp: new Date().toISO
 // Static file serving (production — serves the Vite build)
 // -------------------------------------------------------------------------
 
-// Serve /assets and other static files from the client dist directory
-app.use(
-  "/assets/*",
-  serveStatic({ root: "./client/dist" })
-);
+const CLIENT_DIST = "./client/dist";
 
-// Serve index.html for all non-API routes (SPA fallback)
-app.use(
-  "*",
-  serveStatic({ root: "./client/dist", path: "index.html" })
-);
+app.use("/assets/*", serveStatic({ root: CLIENT_DIST }));
+app.use("*", serveStatic({ root: CLIENT_DIST, path: "index.html" }));
 
 // -------------------------------------------------------------------------
 // Start
@@ -54,15 +47,19 @@ app.use(
 
 const port = config.port;
 
-console.log(`[server] Mealie Recipe Parser starting on port ${port}`);
-console.log(`[server] Mealie instance: ${config.mealieUrl}`);
+const whisperStatus = config.skipLocalWhisper
+  ? "skipped via SKIP_LOCAL_WHISPER"
+  : config.whisperApiUrl ?? "disabled (remote fallback only)";
+
 console.log(
-  `[server] Whisper: ${config.skipLocalWhisper ? "skipped via SKIP_LOCAL_WHISPER" : config.whisperApiUrl ? config.whisperApiUrl : "disabled (remote fallback only)"}`
-);
-console.log(`[server] LLM model: ${config.openaiModel}`);
-console.log(`[server] Transcription model: ${config.transcriptionModel}`);
-console.log(
-  `[server] yt-dlp cookies: ${config.ytdlpCookiesFile ? config.ytdlpCookiesFile : "not configured"}`
+  [
+    `[server] Mealie Recipe Parser starting on port ${port}`,
+    `  Mealie:        ${config.mealieUrl}`,
+    `  LLM model:     ${config.openaiModel}`,
+    `  Transcription: ${config.transcriptionModel}`,
+    `  Whisper:       ${whisperStatus}`,
+    `  yt-dlp cookies: ${config.ytdlpCookiesFile ?? "not configured"}`,
+  ].join("\n")
 );
 
 serve({

@@ -113,9 +113,15 @@ This part was reworked and is important.
 
 ### Frontend
 
-- React + TypeScript + Vite
-- Main UI lives almost entirely in `client/src/App.tsx`
-- Styling is in `client/src/App.module.css`
+- React 19 + TypeScript 6 + Vite 8
+- UnoCSS with presetWind for utility-class styling (no CSS modules)
+- System light/dark theme via `prefers-color-scheme` (`dark:` variant)
+- PWA enabled with manifest.json and service worker
+- Mobile-first responsive design
+- Component-based architecture under `client/src/components/`
+- State management via custom hook `client/src/hooks/useRecipeParser.ts`
+- Types and utilities in `client/src/lib/`
+- `client/src/App.tsx` is a thin shell composing Header, UrlForm, and ProgressCard
 
 ### Deployment
 

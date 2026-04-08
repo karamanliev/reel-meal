@@ -1,9 +1,8 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { readFile, unlink, readdir, rm } from "node:fs/promises";
+import { readFile, readdir, rm, mkdtemp, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { mkdtemp } from "node:fs/promises";
 import { config } from "./config.js";
 
 const execFileAsync = promisify(execFile);
@@ -92,25 +91,54 @@ function ytdlp(args: string[]): Promise<{ stdout: string; stderr: string }> {
   return execFileAsync("yt-dlp", finalArgs, { maxBuffer: 50 * 1024 * 1024 });
 }
 
+/**
+ * Create a temp directory and return its path with a cleanup function.
+ */
+async function createTempDir(prefix: string): Promise<{ dir: string; cleanup: () => Promise<void> }> {
+  const dir = await mkdtemp(join(tmpdir(), prefix));
+  return {
+    dir,
+    cleanup: () => rm(dir, { recursive: true, force: true }),
+  };
+}
+
+/**
+ * Create a temp directory, run `fn` with its path, and always clean up afterward.
+ * On success returns `fn`'s result; on error cleans up then re-throws.
+ */
+async function withTempDir<T>(
+  prefix: string,
+  fn: (dir: string) => Promise<T>
+): Promise<T> {
+  const { dir, cleanup } = await createTempDir(prefix);
+  try {
+    return await fn(dir);
+  } finally {
+    await cleanup().catch(() => {});
+  }
+}
+
+function isGenericTitle(title: string, uploader: string): boolean {
+  if (!title) return true;
+  const lower = title.toLowerCase();
+  return (
+    lower.startsWith("video by ") ||
+    lower.startsWith("post by ") ||
+    lower === uploader
+  );
+}
+
 function chooseBestTitle(data: Record<string, unknown>): string {
   const rawTitle = String(data.title ?? "").trim();
   const description = String(data.description ?? "");
   const uploader = String(data.uploader ?? data.channel ?? "").trim().toLowerCase();
-  const lowerTitle = rawTitle.toLowerCase();
 
-  const genericTitle =
-    !rawTitle ||
-    lowerTitle.startsWith("video by ") ||
-    lowerTitle.startsWith("post by ") ||
-    lowerTitle === uploader;
-
-  if (!genericTitle) return rawTitle;
+  if (!isGenericTitle(rawTitle, uploader)) return rawTitle;
 
   const lines = description
     .split(/\r?\n/)
     .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .filter((line) => !line.startsWith("#"));
+    .filter((line) => line.length > 0 && !line.startsWith("#"));
 
   if (!lines.length) return rawTitle || "Untitled Recipe";
 
@@ -123,6 +151,14 @@ function chooseBestTitle(data: Record<string, unknown>): string {
   }
 
   return title;
+}
+
+function decodeVttEntities(text: string): string {
+  return text
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&nbsp;/g, " ");
 }
 
 /**
@@ -168,37 +204,34 @@ export async function extractSubtitles(
   url: string,
   subtitleLanguage: string
 ): Promise<SubtitleResult | null> {
-  const workDir = await mkdtemp(join(tmpdir(), "recipe-subs-"));
-
   try {
-    await ytdlp([
-      "--skip-download",
-      "--write-subs",
-      "--sub-langs", subtitleLanguage,
-      "--sub-format", "vtt/srt/best",
-      "--convert-subs", "vtt",
-      "--no-playlist",
-      "--output", join(workDir, "subs"),
-      url,
-    ]);
+    return await withTempDir("recipe-subs-", async (workDir) => {
+      await ytdlp([
+        "--skip-download",
+        "--write-subs",
+        "--sub-langs", subtitleLanguage,
+        "--sub-format", "vtt/srt/best",
+        "--convert-subs", "vtt",
+        "--no-playlist",
+        "--output", join(workDir, "subs"),
+        url,
+      ]);
 
-    // Find the downloaded subtitle file
-    const files = await readdir(workDir);
-    const vttFile = files.find((f) => f.endsWith(".vtt"));
+      const files = await readdir(workDir);
+      const vttFile = files.find((f) => f.endsWith(".vtt"));
 
-    if (!vttFile) return null;
+      if (!vttFile) return null;
 
-    const raw = await readFile(join(workDir, vttFile), "utf-8");
-    const text = parseVtt(raw);
+      const raw = await readFile(join(workDir, vttFile), "utf-8");
+      const text = parseVtt(raw);
 
-    if (!text.trim()) return null;
+      if (!text.trim()) return null;
 
-    return { text, source: "subtitles" };
+      return { text, source: "subtitles" as const };
+    });
   } catch {
     // No suitable manual subtitles available or yt-dlp error
     return null;
-  } finally {
-    await rm(workDir, { recursive: true, force: true });
   }
 }
 
@@ -207,8 +240,7 @@ export async function extractSubtitles(
  * Returns the path to the downloaded MP3 file and a cleanup function.
  */
 export async function downloadAudio(url: string): Promise<AudioResult> {
-  const workDir = await mkdtemp(join(tmpdir(), "recipe-audio-"));
-  const outputTemplate = join(workDir, "audio.%(ext)s");
+  const { dir: workDir, cleanup } = await createTempDir("recipe-audio-");
 
   try {
     await ytdlp([
@@ -216,11 +248,10 @@ export async function downloadAudio(url: string): Promise<AudioResult> {
       "-x",
       "--audio-format", "mp3",
       "--audio-quality", "5", // ~128kbps, good enough for transcription
-      "--output", outputTemplate,
+      "--output", join(workDir, "audio.%(ext)s"),
       url,
     ]);
 
-    // Find the output file
     const files = await readdir(workDir);
     const audioFile = files.find((f) => f.startsWith("audio."));
 
@@ -228,17 +259,9 @@ export async function downloadAudio(url: string): Promise<AudioResult> {
       throw new Error("yt-dlp did not produce an audio file");
     }
 
-    const filePath = join(workDir, audioFile);
-
-    return {
-      filePath,
-      cleanup: async () => {
-        await rm(workDir, { recursive: true, force: true });
-      },
-    };
+    return { filePath: join(workDir, audioFile), cleanup };
   } catch (err) {
-    // Clean up on error
-    await rm(workDir, { recursive: true, force: true }).catch(() => {});
+    await cleanup().catch(() => {});
     throw err;
   }
 }
@@ -250,26 +273,23 @@ export async function downloadAudio(url: string): Promise<AudioResult> {
 export async function downloadThumbnail(
   thumbnailUrl: string
 ): Promise<{ filePath: string; cleanup: () => Promise<void> }> {
-  const workDir = await mkdtemp(join(tmpdir(), "recipe-thumb-"));
-  const filePath = join(workDir, "thumbnail.jpg");
+  const { dir: workDir, cleanup } = await createTempDir("recipe-thumb-");
 
-  const response = await fetch(thumbnailUrl);
-  if (!response.ok) {
-    await rm(workDir, { recursive: true, force: true }).catch(() => {});
-    throw new Error(`Failed to download thumbnail: ${response.status} ${response.statusText}`);
+  try {
+    const response = await fetch(thumbnailUrl);
+    if (!response.ok) {
+      throw new Error(`Failed to download thumbnail: ${response.status} ${response.statusText}`);
+    }
+
+    const buffer = await response.arrayBuffer();
+    const filePath = join(workDir, "thumbnail.jpg");
+    await writeFile(filePath, Buffer.from(buffer));
+
+    return { filePath, cleanup };
+  } catch (err) {
+    await cleanup().catch(() => {});
+    throw err;
   }
-
-  const buffer = await response.arrayBuffer();
-  await import("node:fs/promises").then(({ writeFile }) =>
-    writeFile(filePath, Buffer.from(buffer))
-  );
-
-  return {
-    filePath,
-    cleanup: async () => {
-      await rm(workDir, { recursive: true, force: true });
-    },
-  };
 }
 
 /**
@@ -299,13 +319,7 @@ function parseVtt(vtt: string): string {
     if (/^\d+$/.test(trimmed)) continue;
 
     // Remove VTT tags like <00:00:00.000>, <c>, </c>, etc.
-    const cleaned = trimmed
-      .replace(/<[^>]+>/g, "")
-      .replace(/&amp;/g, "&")
-      .replace(/&lt;/g, "<")
-      .replace(/&gt;/g, ">")
-      .replace(/&nbsp;/g, " ")
-      .trim();
+    const cleaned = decodeVttEntities(trimmed.replace(/<[^>]+>/g, "")).trim();
 
     if (!cleaned) continue;
 

@@ -55,7 +55,7 @@ export interface ParsedRecipe {
 // System prompt
 // -------------------------------------------------------------------------
 
-const SYSTEM_PROMPT = `You are a culinary assistant that converts recipe content into structured JSON.
+const SYSTEM_PROMPT_TEMPLATE = `You are a culinary assistant that converts recipe content into structured JSON.
 
 Given a video title, description, and transcript, extract the recipe and output a valid JSON object following the schema below. Output ONLY the JSON object — no markdown fences, no explanation.
 
@@ -141,12 +141,18 @@ Ingredient parsing rules — these are CRITICAL for correct import:
 - NEVER duplicate quantity or unit text inside food.name or note.
 - If the ingredient structure is truly unclear, set quantity/unit/food to null and put everything in originalText + note so no information is lost.
 
-- LANGUAGE: Keep ALL text (name, description, ingredients, instructions, notes) in the original language of the recipe. Do NOT translate anything.`;
+- LANGUAGE: {{LANGUAGE_RULE}}`;
 
-const SYSTEM_PROMPT_TRANSLATE = SYSTEM_PROMPT.replace(
-  "- LANGUAGE: Keep ALL text (name, description, ingredients, instructions, notes) in the original language of the recipe. Do NOT translate anything.",
-  "- LANGUAGE: Translate ALL text (name, description, ingredients, instructions, notes, categories, tags) into English."
-);
+const LANGUAGE_RULE_KEEP =
+  "Keep ALL text (name, description, ingredients, instructions, notes) in the original language of the recipe. Do NOT translate anything.";
+
+const LANGUAGE_RULE_TRANSLATE =
+  "Translate ALL text (name, description, ingredients, instructions, notes, categories, tags) into English.";
+
+function buildSystemPrompt(translate: boolean): string {
+  const rule = translate ? LANGUAGE_RULE_TRANSLATE : LANGUAGE_RULE_KEEP;
+  return SYSTEM_PROMPT_TEMPLATE.replace("{{LANGUAGE_RULE}}", rule);
+}
 
 // -------------------------------------------------------------------------
 // Main parsing function
@@ -157,6 +163,28 @@ const client = new OpenAI({
   baseURL: config.openaiBaseUrl,
 });
 
+const MAX_TRANSCRIPT_LENGTH = 12000;
+
+function buildUserMessage(params: {
+  title: string;
+  description: string;
+  transcript: string;
+  customPrompt?: string;
+}): string {
+  const { title, description, transcript, customPrompt } = params;
+
+  const trimmedTranscript =
+    transcript.length > MAX_TRANSCRIPT_LENGTH
+      ? transcript.slice(0, MAX_TRANSCRIPT_LENGTH) + "\n[transcript truncated]"
+      : transcript;
+
+  const customInstructionBlock = customPrompt?.trim()
+    ? `\n\nAdditional User Instructions:\n${customPrompt.trim()}\n\nApply these additional instructions only if they do not conflict with the schema or rules above.`
+    : "";
+
+  return `Video Title: ${title}\n\nVideo Description:\n${description || "(no description available)"}\n\nTranscript:\n${trimmedTranscript}${customInstructionBlock}`;
+}
+
 export async function parseRecipeFromTranscript(params: {
   title: string;
   description: string;
@@ -164,31 +192,9 @@ export async function parseRecipeFromTranscript(params: {
   translate?: boolean;
   customPrompt?: string;
 }): Promise<ParsedRecipe> {
-  const { title, description, transcript, translate = false, customPrompt } = params;
-  const systemPrompt = translate ? SYSTEM_PROMPT_TRANSLATE : SYSTEM_PROMPT;
-
-  // Trim transcript to avoid hitting context limits (keep ~12k chars)
-  const trimmedTranscript =
-    transcript.length > 12000
-      ? transcript.slice(0, 12000) + "\n[transcript truncated]"
-      : transcript;
-
-  const customInstructionBlock = customPrompt?.trim()
-    ? `
-
-Additional User Instructions:
-${customPrompt.trim()}
-
-Apply these additional instructions only if they do not conflict with the schema or rules above.`
-    : "";
-
-  const userMessage = `Video Title: ${title}
-
-Video Description:
-${description || "(no description available)"}
-
-Transcript:
-${trimmedTranscript}${customInstructionBlock}`;
+  const { translate = false, ...messageParams } = params;
+  const systemPrompt = buildSystemPrompt(translate);
+  const userMessage = buildUserMessage(messageParams);
 
   const MAX_RETRIES = 2;
   let lastError: Error | null = null;
@@ -261,7 +267,15 @@ function validateRecipe(recipe: unknown): asserts recipe is ParsedRecipe {
     throw new Error("Recipe missing required field: recipeIngredient (must be array)");
   }
 
+  if (r["recipeIngredient"].length === 0) {
+    throw new Error("Recipe has empty recipeIngredient array");
+  }
+
   if (!Array.isArray(r["recipeInstructions"])) {
     throw new Error("Recipe missing required field: recipeInstructions (must be array)");
+  }
+
+  if (r["recipeInstructions"].length === 0) {
+    throw new Error("Recipe has empty recipeInstructions array");
   }
 }

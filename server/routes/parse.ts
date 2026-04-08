@@ -5,6 +5,7 @@ import {
   extractSubtitles,
   downloadAudio,
   downloadThumbnail,
+  type VideoMetadata,
 } from "../lib/ytdlp.js";
 import { transcribeAudio } from "../lib/transcribe.js";
 import { parseRecipeFromTranscript } from "../lib/llm.js";
@@ -41,12 +42,86 @@ export function isJobRunning(): boolean {
 }
 
 // -------------------------------------------------------------------------
-// Route
+// Helpers
 // -------------------------------------------------------------------------
 
-export const parseRouter = new Hono();
+type EmitFn = (event: SSEEvent) => Promise<void>;
 
 const CUSTOM_PROMPT_MAX_LENGTH = 400;
+
+/**
+ * Measurement quantities + units pattern — matches things like "200 g",
+ * "1/2 cup", "¼ tsp", "2 бр.", "100 мл", etc.
+ */
+const QUANTITY_UNIT_RE =
+  /(?:\d+(?:[.,]\d+)?|\d+\/\d+|[¼½¾⅓⅔⅛⅜⅝⅞])\s?(?:g|kg|mg|ml|l|tbsp|tsp|cup|cups|oz|lb|бр\.?|ч\.л\.?|с\.л\.?|гр\.?|кг|мл|л)\b/giu;
+
+/** Words/phrases that signal recipe content (EN + BG). */
+const RECIPE_SIGNAL_PATTERNS: RegExp[] = [
+  /ingredients?/i,
+  /instructions?/i,
+  /directions?/i,
+  /method/i,
+  /recipe/i,
+  /съставки/i,
+  /продукти/i,
+  /начин на приготвяне/i,
+  /приготвяне/i,
+  /разбърка/i,
+  /добави/i,
+  /печ[еи]/i,
+];
+
+const THIN_DESCRIPTION_REASON =
+  "Transcript extraction is disabled and the available description looks too thin for a reliable parse. Enable transcript extraction and try again.";
+const SHORT_DESCRIPTION_REASON =
+  "Transcript extraction is disabled and the video description does not contain enough recipe detail to build a reliable recipe. Enable transcript extraction and try again.";
+
+function hasEnoughRecipeContext(description: string): { ok: boolean; reason?: string } {
+  const trimmed = description.trim();
+
+  if (trimmed.length < 160) {
+    return { ok: false, reason: SHORT_DESCRIPTION_REASON };
+  }
+
+  const quantityCount = (trimmed.match(QUANTITY_UNIT_RE) ?? []).length;
+  const signalCount = RECIPE_SIGNAL_PATTERNS.filter((p) => p.test(trimmed)).length;
+  const lineCount = trimmed.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).length;
+
+  if (quantityCount >= 2 && (signalCount >= 1 || lineCount >= 4)) {
+    return { ok: true };
+  }
+
+  return { ok: false, reason: THIN_DESCRIPTION_REASON };
+}
+
+/**
+ * Download audio, transcribe it via Whisper, and emit progress events.
+ * Returns the transcript text and a cleanup function for the temp audio file.
+ */
+async function transcribeViaAudio(
+  videoUrl: string,
+  emit: EmitFn,
+  downloadMessage: string,
+): Promise<{ transcript: string; cleanup: (() => Promise<void>) | null }> {
+  await emit({ step: "transcript", status: "loading", message: downloadMessage });
+
+  const audioResult = await downloadAudio(videoUrl);
+
+  await emit({ step: "transcript", status: "loading", message: "Transcribing audio..." });
+
+  const transcript = await transcribeAudio(audioResult.filePath);
+  console.log(`[parse] Transcription done (${transcript.length} chars)`);
+
+  await emit({
+    step: "transcript",
+    status: "done",
+    message: "Audio transcribed.",
+    data: { transcript, source: "audio" },
+  });
+
+  return { transcript, cleanup: audioResult.cleanup };
+}
 
 async function runRecipeImport(params: {
   preparedImport: PreparedRecipeImport;
@@ -77,43 +152,155 @@ async function runRecipeImport(params: {
   }
 }
 
-function hasEnoughRecipeContext(description: string): { ok: boolean; reason?: string } {
-  const trimmed = description.trim();
-  if (trimmed.length < 160) {
-    return {
-      ok: false,
-      reason:
-        "Transcript extraction is disabled and the video description does not contain enough recipe detail to build a reliable recipe. Enable transcript extraction and try again.",
-    };
-  }
+// -------------------------------------------------------------------------
+// Pipeline steps — each returns updated state needed by later steps
+// -------------------------------------------------------------------------
 
-  const quantityMatches = trimmed.match(/(?:\d+(?:[.,]\d+)?|\d+\/\d+|[¼½¾⅓⅔⅛⅜⅝⅞])\s?(?:g|kg|mg|ml|l|tbsp|tsp|cup|cups|oz|lb|бр\.?|ч\.л\.?|с\.л\.?|гр\.?|кг|мл|л)\b/giu) ?? [];
-  const recipeSignals = [
-    /ingredients?/i,
-    /instructions?/i,
-    /directions?/i,
-    /method/i,
-    /recipe/i,
-    /съставки/i,
-    /продукти/i,
-    /начин на приготвяне/i,
-    /приготвяне/i,
-    /разбърка/i,
-    /добави/i,
-    /печ[еи]/i,
-  ].filter((pattern) => pattern.test(trimmed));
-  const nonEmptyLines = trimmed.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+async function stepMetadata(
+  url: string,
+  emit: EmitFn,
+): Promise<VideoMetadata> {
+  await emit({ step: "metadata", status: "loading", message: "Fetching video info..." });
 
-  if (quantityMatches.length >= 2 && (recipeSignals.length >= 1 || nonEmptyLines.length >= 4)) {
-    return { ok: true };
-  }
+  const metadata = await fetchMetadata(url);
+  const proxiedThumbnailUrl = metadata.thumbnailUrl
+    ? `/api/thumbnail?url=${encodeURIComponent(metadata.thumbnailUrl)}`
+    : "";
+  console.log(`[parse] Metadata fetched: "${metadata.title}"`);
 
-  return {
-    ok: false,
-    reason:
-      "Transcript extraction is disabled and the available description looks too thin for a reliable parse. Enable transcript extraction and try again.",
-  };
+  await emit({
+    step: "metadata",
+    status: "done",
+    message: `Found: ${metadata.title}`,
+    data: {
+      title: metadata.title,
+      thumbnailUrl: proxiedThumbnailUrl,
+      duration: metadata.duration,
+      uploader: metadata.uploader,
+      description: metadata.description,
+      webpageUrl: metadata.webpageUrl,
+      thumbnailSourceUrl: metadata.thumbnailUrl,
+      hasSubtitles: metadata.hasSubtitles,
+      subtitleLanguage: metadata.subtitleLanguage,
+    },
+  });
+
+  return metadata;
 }
+
+interface TranscriptResult {
+  transcript: string;
+  source: "subtitles" | "audio" | null;
+  audioCleanup: (() => Promise<void>) | null;
+  aborted: boolean;
+}
+
+async function stepTranscript(
+  url: string,
+  metadata: VideoMetadata,
+  extractTranscript: boolean,
+  emit: EmitFn,
+): Promise<TranscriptResult> {
+  if (!extractTranscript) {
+    await emit({ step: "transcript", status: "done", message: "Skipped." });
+
+    const contextCheck = hasEnoughRecipeContext(metadata.description);
+    if (!contextCheck.ok) {
+      await emit({ step: "parsing", status: "error", error: contextCheck.reason });
+      return { transcript: "", source: null, audioCleanup: null, aborted: true };
+    }
+    return { transcript: "", source: null, audioCleanup: null, aborted: false };
+  }
+
+  // Try manual subtitles first
+  if (metadata.hasSubtitles) {
+    await emit({ step: "transcript", status: "loading", message: "Extracting manual subtitles..." });
+
+    const subs = metadata.subtitleLanguage
+      ? await extractSubtitles(url, metadata.subtitleLanguage)
+      : null;
+
+    if (subs) {
+      console.log(`[parse] Got subtitles (${subs.text.length} chars)`);
+      await emit({
+        step: "transcript",
+        status: "done",
+        message: "Manual subtitles extracted.",
+        data: { transcript: subs.text, source: "subtitles" },
+      });
+      return { transcript: subs.text, source: "subtitles", audioCleanup: null, aborted: false };
+    }
+
+    // Subtitles were reported but extraction failed — fall through to audio
+    console.log("[parse] Manual subtitle extraction returned nothing, downloading audio...");
+  }
+
+  // Fall back to audio transcription
+  const downloadMsg = metadata.hasSubtitles
+    ? "Suitable subtitles unavailable, downloading audio..."
+    : "Downloading audio for transcription...";
+  const result = await transcribeViaAudio(url, emit, downloadMsg);
+  return { transcript: result.transcript, source: "audio", audioCleanup: result.cleanup, aborted: false };
+}
+
+async function stepParsing(
+  metadata: VideoMetadata,
+  transcript: string,
+  translate: boolean,
+  customPrompt: string,
+  url: string,
+  emit: EmitFn,
+): Promise<{ preparedImport: PreparedRecipeImport }> {
+  await emit({ step: "parsing", status: "loading", message: "Generating recipe with AI..." });
+
+  const recipe = await parseRecipeFromTranscript({
+    title: metadata.title,
+    description: metadata.description,
+    transcript,
+    translate,
+    customPrompt: customPrompt || undefined,
+  });
+  const preparedImport = await prepareRecipeImport(recipe, url);
+
+  console.log(`[parse] Recipe parsed: "${recipe.name}" with ${recipe.recipeIngredient.length} ingredients`);
+
+  await emit({
+    step: "parsing",
+    status: "done",
+    message: `Recipe parsed: ${recipe.name}`,
+    data: {
+      parsedRecipe: recipe,
+      importPayload: preparedImport.payload,
+      ingredientWarnings: preparedImport.ingredientWarnings,
+    },
+  });
+
+  return { preparedImport };
+}
+
+async function stepImporting(
+  preparedImport: PreparedRecipeImport,
+  thumbnailUrl: string | undefined,
+  emit: EmitFn,
+): Promise<void> {
+  await emit({ step: "importing", status: "loading", message: "Importing to Mealie..." });
+
+  const result = await runRecipeImport({ preparedImport, thumbnailUrl });
+  console.log(`[parse] Imported recipe: ${result.recipeUrl}`);
+
+  await emit({
+    step: "importing",
+    status: "done",
+    message: "Recipe imported successfully!",
+    data: { recipeUrl: result.recipeUrl, slug: result.slug },
+  });
+}
+
+// -------------------------------------------------------------------------
+// Route
+// -------------------------------------------------------------------------
+
+export const parseRouter = new Hono();
 
 parseRouter.get("/api/thumbnail", async (c) => {
   const thumbnailUrl = c.req.query("url");
@@ -177,11 +364,9 @@ parseRouter.get("/api/parse", async (c) => {
   return streamSSE(c, async (stream) => {
     jobRunning = true;
     let currentStep: StepName = "metadata";
-
-    // Cleanup handles for temp files
     let audioCleanup: (() => Promise<void>) | null = null;
 
-    const emit = async (event: SSEEvent) => {
+    const emit: EmitFn = async (event) => {
       await stream.writeSSE({
         data: JSON.stringify(event),
         event: "message",
@@ -189,145 +374,13 @@ parseRouter.get("/api/parse", async (c) => {
     };
 
     try {
-      // ----------------------------------------------------------------
-      // Step 1: Fetch metadata
-      // ----------------------------------------------------------------
-      currentStep = "metadata";
-      await emit({ step: "metadata", status: "loading", message: "Fetching video info..." });
+      const metadata = await stepMetadata(url, emit);
 
-      const metadata = await fetchMetadata(url);
-      const proxiedThumbnailUrl = metadata.thumbnailUrl
-        ? `/api/thumbnail?url=${encodeURIComponent(metadata.thumbnailUrl)}`
-        : "";
-      console.log(`[parse] Metadata fetched: "${metadata.title}"`);
+      currentStep = "transcript";
+      const transcriptResult = await stepTranscript(url, metadata, extractTranscript, emit);
+      audioCleanup = transcriptResult.audioCleanup;
 
-      await emit({
-        step: "metadata",
-        status: "done",
-        message: `Found: ${metadata.title}`,
-        data: {
-          title: metadata.title,
-          thumbnailUrl: proxiedThumbnailUrl,
-          duration: metadata.duration,
-          uploader: metadata.uploader,
-          description: metadata.description,
-          webpageUrl: metadata.webpageUrl,
-          thumbnailSourceUrl: metadata.thumbnailUrl,
-          hasSubtitles: metadata.hasSubtitles,
-          subtitleLanguage: metadata.subtitleLanguage,
-        },
-      });
-
-      // ----------------------------------------------------------------
-      // Step 2: Get transcript
-      // ----------------------------------------------------------------
-      let transcript = "";
-      let transcriptSource: "subtitles" | "audio" | null = null;
-
-      if (!extractTranscript) {
-        await emit({
-          step: "transcript",
-          status: "done",
-          message: "Skipped.",
-        });
-
-        const contextCheck = hasEnoughRecipeContext(metadata.description);
-        if (!contextCheck.ok) {
-          await emit({
-            step: "parsing",
-            status: "error",
-            error: contextCheck.reason,
-          });
-          return;
-        }
-      } else if (metadata.hasSubtitles) {
-        currentStep = "transcript";
-        await emit({
-          step: "transcript",
-          status: "loading",
-          message: "Extracting manual subtitles...",
-        });
-
-        const subs = metadata.subtitleLanguage
-          ? await extractSubtitles(url, metadata.subtitleLanguage)
-          : null;
-
-        if (subs) {
-          transcript = subs.text;
-          transcriptSource = "subtitles";
-          console.log(`[parse] Got subtitles (${transcript.length} chars)`);
-          await emit({
-            step: "transcript",
-            status: "done",
-            message: "Manual subtitles extracted.",
-            data: {
-              transcript,
-              source: transcriptSource,
-            },
-          });
-        } else {
-          // Suitable manual subtitles were reported but extraction failed — fall through to audio
-          console.log("[parse] Manual subtitle extraction returned nothing, downloading audio...");
-          await emit({
-            step: "transcript",
-            status: "loading",
-            message: "Suitable subtitles unavailable, downloading audio...",
-          });
-
-          const audioResult = await downloadAudio(url);
-          audioCleanup = audioResult.cleanup;
-
-          await emit({
-            step: "transcript",
-            status: "loading",
-            message: "Transcribing audio...",
-          });
-
-          transcript = await transcribeAudio(audioResult.filePath);
-          transcriptSource = "audio";
-          console.log(`[parse] Transcription done (${transcript.length} chars)`);
-
-          await emit({
-            step: "transcript",
-            status: "done",
-            message: "Audio transcribed.",
-            data: {
-              transcript,
-              source: transcriptSource,
-            },
-          });
-        }
-      } else {
-        currentStep = "transcript";
-        await emit({
-          step: "transcript",
-          status: "loading",
-          message: "Downloading audio for transcription...",
-        });
-
-        const audioResult = await downloadAudio(url);
-        audioCleanup = audioResult.cleanup;
-
-        await emit({
-          step: "transcript",
-          status: "loading",
-          message: "Transcribing audio...",
-        });
-
-        transcript = await transcribeAudio(audioResult.filePath);
-        transcriptSource = "audio";
-        console.log(`[parse] Transcription done (${transcript.length} chars)`);
-
-        await emit({
-          step: "transcript",
-          status: "done",
-          message: "Audio transcribed.",
-          data: {
-            transcript,
-            source: transcriptSource,
-          },
-        });
-      }
+      if (transcriptResult.aborted) return;
 
       // Clean up audio ASAP
       if (audioCleanup) {
@@ -335,82 +388,20 @@ parseRouter.get("/api/parse", async (c) => {
         audioCleanup = null;
       }
 
-      // ----------------------------------------------------------------
-      // Step 3: Parse recipe with LLM
-      // ----------------------------------------------------------------
       currentStep = "parsing";
-      await emit({
-        step: "parsing",
-        status: "loading",
-        message: "Generating recipe with AI...",
-      });
+      const { preparedImport } = await stepParsing(
+        metadata, transcriptResult.transcript, translate, customPrompt, url, emit,
+      );
 
-      const recipe = await parseRecipeFromTranscript({
-        title: metadata.title,
-        description: metadata.description,
-        transcript,
-        translate,
-        customPrompt: customPrompt || undefined,
-      });
-      const preparedImport = await prepareRecipeImport(recipe, url);
+      if (!autoImport) return;
 
-      console.log(`[parse] Recipe parsed: "${recipe.name}" with ${recipe.recipeIngredient.length} ingredients`);
-
-      await emit({
-        step: "parsing",
-        status: "done",
-        message: `Recipe parsed: ${recipe.name}`,
-        data: {
-          parsedRecipe: recipe,
-          importPayload: preparedImport.payload,
-          ingredientWarnings: preparedImport.ingredientWarnings,
-        },
-      });
-
-      if (!autoImport) {
-        return;
-      }
-
-      // ----------------------------------------------------------------
-      // Step 4: Import to Mealie
-      // ----------------------------------------------------------------
       currentStep = "importing";
-      await emit({
-        step: "importing",
-        status: "loading",
-        message: "Importing to Mealie...",
-      });
-
-      const result = await runRecipeImport({
-        preparedImport,
-        thumbnailUrl: metadata.thumbnailUrl,
-      });
-
-      console.log(`[parse] Imported recipe: ${result.recipeUrl}`);
-
-      await emit({
-        step: "importing",
-        status: "done",
-        message: "Recipe imported successfully!",
-        data: {
-          recipeUrl: result.recipeUrl,
-          slug: result.slug,
-        },
-      });
+      await stepImporting(preparedImport, metadata.thumbnailUrl, emit);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[parse] Pipeline error: ${message}`);
-
-      // Determine which step failed based on the error context
-      // The last emitted loading step is the one that failed
-      // We emit a generic error since we don't track current step here
-      await emit({
-        step: currentStep,
-        status: "error",
-        error: message,
-      }).catch(() => {});
+      await emit({ step: currentStep, status: "error", error: message }).catch(() => {});
     } finally {
-      // Clean up any remaining temp files
       if (audioCleanup) await audioCleanup().catch(() => {});
       jobRunning = false;
     }
