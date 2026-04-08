@@ -46,6 +46,8 @@ export function isJobRunning(): boolean {
 
 export const parseRouter = new Hono();
 
+const CUSTOM_PROMPT_MAX_LENGTH = 400;
+
 async function runRecipeImport(params: {
   preparedImport: PreparedRecipeImport;
   thumbnailUrl?: string;
@@ -152,9 +154,17 @@ parseRouter.get("/api/parse", async (c) => {
   const translate = c.req.query("translate") === "true";
   const extractTranscript = c.req.query("extractTranscript") !== "false";
   const autoImport = c.req.query("autoImport") !== "false";
+  const customPrompt = c.req.query("customPrompt")?.trim() || "";
 
   if (!url) {
     return c.json({ error: "Missing required query parameter: url" }, 400);
+  }
+
+  if (customPrompt.length > CUSTOM_PROMPT_MAX_LENGTH) {
+    return c.json(
+      { error: `Custom prompt is too long. Keep it under ${CUSTOM_PROMPT_MAX_LENGTH} characters.` },
+      400
+    );
   }
 
   if (jobRunning) {
@@ -340,6 +350,7 @@ parseRouter.get("/api/parse", async (c) => {
         description: metadata.description,
         transcript,
         translate,
+        customPrompt: customPrompt || undefined,
       });
       const preparedImport = await prepareRecipeImport(recipe, url);
 

@@ -389,10 +389,13 @@ function buildParsingDiff(details: ParsingDetails): ParsingDiff {
 // -------------------------------------------------------------------------
 
 export default function App() {
+  const CUSTOM_PROMPT_MAX_LENGTH = 400;
   const [url, setUrl] = useState("");
   const [translate, setTranslate] = useState(false);
   const [extractTranscript, setExtractTranscript] = useState(true);
   const [autoImport, setAutoImport] = useState(true);
+  const [useCustomPrompt, setUseCustomPrompt] = useState(false);
+  const [customPrompt, setCustomPrompt] = useState("");
   const [phase, setPhase] = useState<"input" | "loading" | "review" | "done" | "error">("input");
   const [steps, setSteps] = useState<Record<StepName, StepState>>(DEFAULT_STEPS);
   const [recipeTitle, setRecipeTitle] = useState<string | null>(null);
@@ -448,10 +451,18 @@ export default function App() {
     setPhase("loading");
     setManualImportError(null);
 
-    const encodedUrl = encodeURIComponent(videoUrl);
-    const es = new EventSource(
-      `/api/parse?url=${encodedUrl}&translate=${translate}&extractTranscript=${extractTranscript}&autoImport=${autoImport}`
-    );
+    const params = new URLSearchParams({
+      url: videoUrl,
+      translate: String(translate),
+      extractTranscript: String(extractTranscript),
+      autoImport: String(autoImport),
+    });
+    const trimmedCustomPrompt = customPrompt.trim();
+    if (useCustomPrompt && trimmedCustomPrompt) {
+      params.set("customPrompt", trimmedCustomPrompt);
+    }
+
+    const es = new EventSource(`/api/parse?${params.toString()}`);
     eventSourceRef.current = es;
 
     es.addEventListener("message", (event: MessageEvent) => {
@@ -663,6 +674,15 @@ export default function App() {
             <label className={styles.toggle}>
               <input
                 type="checkbox"
+                checked={useCustomPrompt}
+                onChange={(e) => setUseCustomPrompt(e.target.checked)}
+                disabled={isLoading}
+              />
+              <span>Custom prompt</span>
+            </label>
+            <label className={styles.toggle}>
+              <input
+                type="checkbox"
                 checked={extractTranscript}
                 onChange={(e) => setExtractTranscript(e.target.checked)}
                 disabled={isLoading}
@@ -679,6 +699,22 @@ export default function App() {
               <span>Auto import</span>
             </label>
           </div>
+          {useCustomPrompt && (
+            <div className={styles.customPromptWrap}>
+              <textarea
+                className={styles.textarea}
+                value={customPrompt}
+                onChange={(e) => setCustomPrompt(e.target.value)}
+                placeholder='Add extra instructions for the parser. Example: "Prefer metric units" or "Keep steps extra concise".'
+                disabled={isLoading}
+                maxLength={CUSTOM_PROMPT_MAX_LENGTH}
+                rows={4}
+              />
+              <div className={styles.fieldHint}>
+                Extra instructions are added on top of the built-in parser prompt. Keep it short.
+              </div>
+            </div>
+          )}
         </form>
 
         {(phase === "loading" || phase === "review" || phase === "done" || phase === "error") && (

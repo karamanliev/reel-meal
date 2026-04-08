@@ -30,6 +30,7 @@ Implemented features:
 - Human-readable recipe times for import and UI display
 - Optional grouped ingredients and grouped instructions using Mealie section titles
 - Optional translation to English
+- Optional short custom prompt that adds extra user instructions on top of the built-in parser prompt
 - Mealie recipe creation, thumbnail upload, and final patch/update
 - Ingredient normalization for Mealie with food/unit ID resolution
 - Manual review flow with `Auto import` toggle
@@ -67,6 +68,15 @@ Implemented features:
 - Instruction steps should prefer fewer, more meaningful chunks instead of many tiny atomic steps.
 - Grouped ingredients/instructions should only be used when the source explicitly names recipe components or phases.
 - For Mealie section semantics, only the first ingredient/instruction item in a section should carry the `title`; following items in the same section should leave `title` empty.
+
+### Custom prompt behavior
+
+- The frontend has a `Custom prompt` checkbox, unchecked by default.
+- When enabled, it reveals a textarea for additional parser instructions.
+- These instructions do not replace the system prompt; they are appended as supplemental user guidance.
+- If the checkbox is turned off after typing, the text is preserved in the UI state and restored when re-enabled.
+- The custom prompt is sent only when enabled and non-empty.
+- Because `/api/parse` currently uses `EventSource` with a `GET` request, the custom prompt is intentionally limited to a short length.
 
 ### Ingredient import strategy
 
@@ -183,6 +193,7 @@ Used only by the manual-review flow.
   - Defines SSE event shape.
   - Enforces single-job lock with `jobRunning`.
   - Handles metadata fetch, transcript extraction/transcription, LLM parse, import prep, and final import.
+  - Accepts an optional short `customPrompt` query parameter for supplemental parser instructions.
   - Contains the manual import endpoint.
   - Contains thumbnail proxy endpoint.
   - Contains the metadata-only recipe-context heuristic for when transcript extraction is disabled.
@@ -216,6 +227,7 @@ Used only by the manual-review flow.
   - Holds the system prompt for recipe extraction.
   - Has strict ingredient-structuring rules, especially around quantity/unit/food/note separation.
   - Instructs the model to keep servings/nutrition only when explicit, omit yield, prefer readable times, and only group when sections are explicit in the source.
+  - Accepts optional supplemental user instructions without replacing the system prompt.
   - Retries if the LLM returns invalid JSON.
   - Optionally translates output into English.
 
@@ -248,6 +260,7 @@ Used only by the manual-review flow.
 - `client/src/App.tsx`
   - Main UI and almost all client behavior.
   - URL form and toggles.
+  - Includes the optional `Custom prompt` checkbox and textarea for extra parser instructions.
   - SSE connection management.
   - Step state tracking.
   - Metadata/transcript/parsing detail panels.
@@ -274,6 +287,7 @@ Query params:
 - `translate=true|false`
 - `extractTranscript=true|false`
 - `autoImport=true|false`
+- `customPrompt=<short text>` optional
 
 Returns:
 
@@ -325,6 +339,7 @@ Returns:
 - The current Mealie payload intentionally leaves `recipeCategory` and `tags` empty at import time, even though the LLM can produce them.
 - Missing `recipeServings` should stay missing; it is no longer forced to `0` during import preparation.
 - Mealie displays stored time strings as-is, so readable times must be stored on import if the UI should show readable values.
+- The custom prompt currently rides on the `GET /api/parse` query string, so it should stay short and should not be treated as private input.
 
 ## Known Gaps / Possible Next Work
 

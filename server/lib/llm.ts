@@ -159,8 +159,9 @@ export async function parseRecipeFromTranscript(params: {
   description: string;
   transcript: string;
   translate?: boolean;
+  customPrompt?: string;
 }): Promise<ParsedRecipe> {
-  const { title, description, transcript, translate = false } = params;
+  const { title, description, transcript, translate = false, customPrompt } = params;
   const systemPrompt = translate ? SYSTEM_PROMPT_TRANSLATE : SYSTEM_PROMPT;
 
   // Trim transcript to avoid hitting context limits (keep ~12k chars)
@@ -169,13 +170,22 @@ export async function parseRecipeFromTranscript(params: {
       ? transcript.slice(0, 12000) + "\n[transcript truncated]"
       : transcript;
 
+  const customInstructionBlock = customPrompt?.trim()
+    ? `
+
+Additional User Instructions:
+${customPrompt.trim()}
+
+Apply these additional instructions only if they do not conflict with the schema or rules above.`
+    : "";
+
   const userMessage = `Video Title: ${title}
 
 Video Description:
 ${description || "(no description available)"}
 
 Transcript:
-${trimmedTranscript}`;
+${trimmedTranscript}${customInstructionBlock}`;
 
   const MAX_RETRIES = 2;
   let lastError: Error | null = null;

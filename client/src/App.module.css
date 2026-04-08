@@ -135,6 +135,44 @@
   margin-top: 0.75rem;
 }
 
+.customPromptWrap {
+  margin-top: 0.75rem;
+}
+
+.textarea {
+  width: 100%;
+  min-height: 6.5rem;
+  padding: 0.75rem 0.875rem;
+  background: #1c1f28;
+  border: 1px solid #2e3240;
+  border-radius: 0.5rem;
+  color: #e8e8e8;
+  font: inherit;
+  line-height: 1.45;
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.textarea:focus {
+  border-color: #4ade80;
+}
+
+.textarea:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.textarea::placeholder {
+  color: #555;
+}
+
+.fieldHint {
+  margin-top: 0.35rem;
+  font-size: 0.8125rem;
+  color: #7d8394;
+}
+
 .toggle {
   display: inline-flex;
   align-items: center;
