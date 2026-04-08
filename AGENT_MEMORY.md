@@ -87,6 +87,8 @@ This part was reworked and is important.
 - Imported ingredients should use ID-backed `food` / `unit` objects.
 - `display` is intentionally sent as `""` so Mealie auto-generates it.
 - Missing quantity should be `null`, not `0`.
+- Unit names should preserve the source recipe's language/script instead of being normalized into English.
+- Unit resolution is intentionally stricter than food resolution: units use exact-name matching only, so `мл` does not get silently matched to `milliliter`.
 - When food/unit resolution fails, information is preserved in `note` and warnings are surfaced.
 
 ### Mealie API quirk that mattered

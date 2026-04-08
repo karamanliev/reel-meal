@@ -156,7 +156,12 @@ function normalizeLookupKey(value: string): string {
   return value.trim().toLowerCase();
 }
 
-async function lookupNamedValue(path: string, name: string): Promise<MealieIdValue | null> {
+async function lookupNamedValue(
+  path: string,
+  name: string,
+  options?: { acceptSingleResult?: boolean }
+): Promise<MealieIdValue | null> {
+  const acceptSingleResult = options?.acceptSingleResult ?? true;
   const response = await mealieRequest<PaginatedResponse>(
     "GET",
     `${path}?search=${encodeURIComponent(name)}&perPage=50`
@@ -171,7 +176,7 @@ async function lookupNamedValue(path: string, name: string): Promise<MealieIdVal
   if (exact) return { id: exact.id, name: exact.name };
 
   // Accept first result if only one came back (close-enough match)
-  if (items.length === 1) {
+  if (acceptSingleResult && items.length === 1) {
     return { id: items[0].id, name: items[0].name };
   }
 
@@ -191,12 +196,13 @@ async function createNamedValue(path: string, name: string): Promise<MealieIdVal
 function getCachedIdValue(
   cache: Map<string, Promise<MealieIdValue | null>>,
   path: string,
-  name: string
+  name: string,
+  options?: { acceptSingleResult?: boolean }
 ): Promise<MealieIdValue | null> {
   const key = normalizeLookupKey(name);
   let pending = cache.get(key);
   if (!pending) {
-    pending = lookupNamedValue(path, name)
+    pending = lookupNamedValue(path, name, options)
       .then((existing) => existing ?? createNamedValue(path, name))
       .catch((err) => {
         console.warn(`[mealie] Failed to resolve ${path} "${name}": ${err instanceof Error ? err.message : err}`);
@@ -218,7 +224,10 @@ async function resolveFood(name: string | undefined | null): Promise<MealieIdVal
 async function resolveUnit(name: string | undefined | null): Promise<MealieIdValue | null> {
   const trimmed = name?.trim();
   if (!trimmed) return null;
-  return getCachedIdValue(unitCache, "/api/units", trimmed);
+  // Units should preserve the recipe's original language/script. Avoid fuzzy
+  // single-result matches like "мл" -> "milliliter" and create the exact
+  // unit name instead when Mealie does not already have it.
+  return getCachedIdValue(unitCache, "/api/units", trimmed, { acceptSingleResult: false });
 }
 
 // -------------------------------------------------------------------------

@@ -123,6 +123,9 @@ Ingredient parsing rules — these are CRITICAL for correct import:
   - "3-4" → pick the middle: 3.5. Ranges go in note.
   - Fractions: "½" → 0.5, "1½" → 1.5, "¼" → 0.25.
 - unit.name: ONLY the measurement unit word, nothing else.
+  - Keep the unit in the same language/script and style used by the source recipe.
+  - For Bulgarian recipes, prefer Bulgarian forms like "мл", "л", "г", "кг", "с.л.", "ч.л.", "бр." or Bulgarian unit words when that is how the source expresses them.
+  - Do NOT switch a Bulgarian unit into English words like "milliliter" or "gram" unless the source recipe itself is in English.
   - Examples: "г", "кг", "мл", "л", "бр", "ч.л.", "с.л.", "щипка", "cup", "tbsp", "tsp", "oz".
   - If there is no unit (e.g. "3 яйца"), set unit to null. "яйца" is a food, not a unit.
   - Countable foods (eggs, onions, cloves) do NOT need a unit — set unit to null.
