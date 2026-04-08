@@ -459,6 +459,56 @@
   min-height: 11rem;
 }
 
+.previewHint {
+  color: #8f9ab0;
+}
+
+.manualImportPanel {
+  padding: 1rem;
+  border-top: 1px solid #2e3240;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  background: rgba(74, 222, 128, 0.04);
+}
+
+.manualImportText {
+  margin: 0;
+  font-size: 0.875rem;
+  color: #c8d0de;
+  flex: 1 1 260px;
+}
+
+.manualImportError {
+  margin: 0;
+  width: 100%;
+  font-size: 0.8125rem;
+  color: #f29b9b;
+}
+
+.manualImportButton {
+  padding: 0.5rem 0.95rem;
+  background: #4ade80;
+  color: #0f1117;
+  border: none;
+  border-radius: 0.45rem;
+  font-size: 0.875rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+.manualImportButton:hover:not(:disabled) {
+  background: #22c55e;
+}
+
+.manualImportButton:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 /* Status-specific colours */
 
 .step--idle .stepIcon {

@@ -34,6 +34,7 @@ cp .env.example .env
 | `TRANSCRIPTION_MODEL` | Audio-capable model for transcription fallback — default `google/gemini-2.5-flash` |
 | `WHISPER_API_URL` | Optional — URL to a local OpenAI-compatible Whisper server |
 | `WHISPER_TIMEOUT_MS` | How long to wait for local Whisper before falling back — default `15000` |
+| `SKIP_LOCAL_WHISPER` | Optional — set to `true` to skip local Whisper entirely and always use remote transcription |
 | `MEALIE_URL` | URL to your Mealie instance e.g. `http://mealie.local:9925` |
 | `MEALIE_API_TOKEN` | Long-lived API token from Mealie → Profile → API Tokens |
 | `PORT` | Server port — default `3000` |

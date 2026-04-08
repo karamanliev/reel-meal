@@ -8,7 +8,12 @@ import {
 } from "../lib/ytdlp.js";
 import { transcribeAudio } from "../lib/transcribe.js";
 import { parseRecipeFromTranscript } from "../lib/llm.js";
-import { importRecipe, prepareRecipeImport } from "../lib/mealie.js";
+import {
+  importRecipe,
+  prepareRecipeImport,
+  type PreparedRecipeImport,
+  type RecipeImportPayload,
+} from "../lib/mealie.js";
 
 // -------------------------------------------------------------------------
 // SSE event types (shared with frontend)
@@ -40,6 +45,35 @@ export function isJobRunning(): boolean {
 // -------------------------------------------------------------------------
 
 export const parseRouter = new Hono();
+
+async function runRecipeImport(params: {
+  preparedImport: PreparedRecipeImport;
+  thumbnailUrl?: string;
+}): Promise<{ recipeUrl: string; slug: string }> {
+  const { preparedImport, thumbnailUrl } = params;
+
+  let thumbCleanup: (() => Promise<void>) | null = null;
+
+  try {
+    let thumbnailFilePath: string | undefined;
+    if (thumbnailUrl) {
+      try {
+        const thumb = await downloadThumbnail(thumbnailUrl);
+        thumbnailFilePath = thumb.filePath;
+        thumbCleanup = thumb.cleanup;
+      } catch (err) {
+        console.warn(`[parse] Thumbnail download failed: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+
+    return await importRecipe({
+      preparedImport,
+      thumbnailFilePath,
+    });
+  } finally {
+    if (thumbCleanup) await thumbCleanup().catch(() => {});
+  }
+}
 
 function hasEnoughRecipeContext(description: string): { ok: boolean; reason?: string } {
   const trimmed = description.trim();
@@ -117,6 +151,7 @@ parseRouter.get("/api/parse", async (c) => {
   const url = c.req.query("url");
   const translate = c.req.query("translate") === "true";
   const extractTranscript = c.req.query("extractTranscript") !== "false";
+  const autoImport = c.req.query("autoImport") !== "false";
 
   if (!url) {
     return c.json({ error: "Missing required query parameter: url" }, 400);
@@ -135,7 +170,6 @@ parseRouter.get("/api/parse", async (c) => {
 
     // Cleanup handles for temp files
     let audioCleanup: (() => Promise<void>) | null = null;
-    let thumbCleanup: (() => Promise<void>) | null = null;
 
     const emit = async (event: SSEEvent) => {
       await stream.writeSSE({
@@ -319,6 +353,10 @@ parseRouter.get("/api/parse", async (c) => {
         },
       });
 
+      if (!autoImport) {
+        return;
+      }
+
       // ----------------------------------------------------------------
       // Step 4: Import to Mealie
       // ----------------------------------------------------------------
@@ -329,21 +367,9 @@ parseRouter.get("/api/parse", async (c) => {
         message: "Importing to Mealie...",
       });
 
-      // Download thumbnail
-      let thumbnailFilePath: string | undefined;
-      if (metadata.thumbnailUrl) {
-        try {
-          const thumb = await downloadThumbnail(metadata.thumbnailUrl);
-          thumbnailFilePath = thumb.filePath;
-          thumbCleanup = thumb.cleanup;
-        } catch (err) {
-          console.warn(`[parse] Thumbnail download failed: ${err instanceof Error ? err.message : err}`);
-        }
-      }
-
-      const result = await importRecipe({
+      const result = await runRecipeImport({
         preparedImport,
-        thumbnailFilePath,
+        thumbnailUrl: metadata.thumbnailUrl,
       });
 
       console.log(`[parse] Imported recipe: ${result.recipeUrl}`);
@@ -372,8 +398,65 @@ parseRouter.get("/api/parse", async (c) => {
     } finally {
       // Clean up any remaining temp files
       if (audioCleanup) await audioCleanup().catch(() => {});
-      if (thumbCleanup) await thumbCleanup().catch(() => {});
       jobRunning = false;
     }
   });
+});
+
+parseRouter.post("/api/import", async (c) => {
+  if (jobRunning) {
+    return c.json(
+      { error: "A recipe is already being processed. Please wait and try again." },
+      409
+    );
+  }
+
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
+
+  if (typeof body !== "object" || body === null) {
+    return c.json({ error: "Invalid request body" }, 400);
+  }
+
+  const payload = (body as { importPayload?: unknown }).importPayload;
+  if (typeof payload !== "object" || payload === null) {
+    return c.json({ error: "Missing importPayload" }, 400);
+  }
+
+  const ingredientWarnings = Array.isArray((body as { ingredientWarnings?: unknown }).ingredientWarnings)
+    ? (body as { ingredientWarnings: unknown[] }).ingredientWarnings.filter(
+        (warning): warning is string => typeof warning === "string"
+      )
+    : [];
+  const thumbnailUrl =
+    typeof (body as { thumbnailUrl?: unknown }).thumbnailUrl === "string"
+      ? (body as { thumbnailUrl: string }).thumbnailUrl
+      : undefined;
+
+  jobRunning = true;
+
+  try {
+    const result = await runRecipeImport({
+      preparedImport: {
+        payload: payload as RecipeImportPayload,
+        ingredientWarnings,
+      },
+      thumbnailUrl,
+    });
+
+    return c.json({
+      recipeUrl: result.recipeUrl,
+      slug: result.slug,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[parse] Manual import error: ${message}`);
+    return c.json({ error: message }, 500);
+  } finally {
+    jobRunning = false;
+  }
 });

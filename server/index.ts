@@ -57,7 +57,7 @@ const port = config.port;
 console.log(`[server] Mealie Recipe Parser starting on port ${port}`);
 console.log(`[server] Mealie instance: ${config.mealieUrl}`);
 console.log(
-  `[server] Whisper: ${config.whisperApiUrl ? config.whisperApiUrl : "disabled (remote fallback only)"}`
+  `[server] Whisper: ${config.skipLocalWhisper ? "skipped via SKIP_LOCAL_WHISPER" : config.whisperApiUrl ? config.whisperApiUrl : "disabled (remote fallback only)"}`
 );
 console.log(`[server] LLM model: ${config.openaiModel}`);
 console.log(`[server] Transcription model: ${config.transcriptionModel}`);

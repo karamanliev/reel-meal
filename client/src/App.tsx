@@ -243,12 +243,14 @@ export default function App() {
   const [url, setUrl] = useState("");
   const [translate, setTranslate] = useState(false);
   const [extractTranscript, setExtractTranscript] = useState(true);
-  const [phase, setPhase] = useState<"input" | "loading" | "done" | "error">("input");
+  const [autoImport, setAutoImport] = useState(true);
+  const [phase, setPhase] = useState<"input" | "loading" | "review" | "done" | "error">("input");
   const [steps, setSteps] = useState<Record<StepName, StepState>>(DEFAULT_STEPS);
   const [recipeTitle, setRecipeTitle] = useState<string | null>(null);
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
   const [recipeUrl, setRecipeUrl] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [manualImportError, setManualImportError] = useState<string | null>(null);
   const [metadataDetails, setMetadataDetails] = useState<MetadataDetails | null>(null);
   const [transcriptDetails, setTranscriptDetails] = useState<TranscriptDetails | null>(null);
   const [parsingDetails, setParsingDetails] = useState<ParsingDetails | null>(null);
@@ -264,6 +266,7 @@ export default function App() {
 
   const reset = () => {
     eventSourceRef.current?.close();
+    eventSourceRef.current = null;
     setPhase("input");
     setSteps(DEFAULT_STEPS);
     currentStepRef.current = "metadata";
@@ -271,6 +274,7 @@ export default function App() {
     setThumbnailUrl(null);
     setRecipeUrl(null);
     setErrorMessage(null);
+    setManualImportError(null);
     setMetadataDetails(null);
     setTranscriptDetails(null);
     setParsingDetails(null);
@@ -293,10 +297,11 @@ export default function App() {
 
   const startParsing = (videoUrl: string) => {
     setPhase("loading");
+    setManualImportError(null);
 
     const encodedUrl = encodeURIComponent(videoUrl);
     const es = new EventSource(
-      `/api/parse?url=${encodedUrl}&translate=${translate}&extractTranscript=${extractTranscript}`
+      `/api/parse?url=${encodedUrl}&translate=${translate}&extractTranscript=${extractTranscript}&autoImport=${autoImport}`
     );
     eventSourceRef.current = es;
 
@@ -350,12 +355,25 @@ export default function App() {
               ? msg.data.ingredientWarnings.filter((warning): warning is string => typeof warning === "string")
               : [],
           });
+
+          if (!autoImport) {
+            updateStep("importing", {
+              status: "idle",
+              message: "Ready to import when you are.",
+            });
+            setExpandedDetails((prev) => ({ ...prev, parsing: true }));
+            setPhase("review");
+            eventSourceRef.current = null;
+            es.close();
+            return;
+          }
         }
 
         // Final step done
         if (msg.step === "importing" && msg.data?.recipeUrl) {
           setRecipeUrl(msg.data.recipeUrl);
           setPhase("done");
+          eventSourceRef.current = null;
           es.close();
         }
       } else if (msg.status === "error") {
@@ -366,23 +384,80 @@ export default function App() {
         });
         setErrorMessage(msg.error ?? "An unexpected error occurred.");
         setPhase("error");
+        eventSourceRef.current = null;
         es.close();
       }
     });
 
     es.onerror = () => {
+      if (eventSourceRef.current !== es) return;
       updateStep(currentStepRef.current, {
         status: "error",
         message: "Connection to server lost. Please try again.",
       });
       setErrorMessage("Connection to server lost. Please try again.");
       setPhase("error");
+      eventSourceRef.current = null;
       es.close();
     };
   };
 
+  const handleManualImport = async () => {
+    if (!parsingDetails) return;
+
+    setManualImportError(null);
+    setErrorMessage(null);
+    setPhase("loading");
+    currentStepRef.current = "importing";
+    updateStep("importing", {
+      status: "loading",
+      message: "Importing to Mealie...",
+    });
+
+    try {
+      const response = await fetch("/api/import", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          importPayload: parsingDetails.importPayload,
+          ingredientWarnings: parsingDetails.ingredientWarnings,
+          thumbnailUrl: metadataDetails?.thumbnailSourceUrl,
+        }),
+      });
+
+      const data = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        recipeUrl?: string;
+      };
+
+      if (!response.ok || !data.recipeUrl) {
+        throw new Error(data.error || "Manual import failed.");
+      }
+
+      setRecipeUrl(data.recipeUrl);
+      updateStep("importing", {
+        status: "done",
+        message: "Recipe imported successfully!",
+      });
+      setPhase("done");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      updateStep("importing", {
+        status: "error",
+        message,
+      });
+      setManualImportError(message);
+      setPhase("review");
+    }
+  };
+
   const isLoading = phase === "loading";
   const parsingDiff = parsingDetails ? buildParsingDiff(parsingDetails) : null;
+  const showDiffView = Boolean(recipeUrl);
+  const showImportPreview = phase === "review" && Boolean(parsingDetails) && !recipeUrl;
+  const showManualImportPanel = phase === "review" && Boolean(parsingDetails) && !recipeUrl;
 
   return (
     <div className={styles.root}>
@@ -418,7 +493,7 @@ export default function App() {
               type="submit"
               disabled={isLoading || !url.trim()}
             >
-              {isLoading ? "Processing..." : "Import Recipe"}
+              {isLoading ? "Processing..." : autoImport ? "Import Recipe" : "Generate Recipe"}
             </button>
           </div>
           <div className={styles.checkboxRow}>
@@ -440,10 +515,19 @@ export default function App() {
               />
               <span>Extract transcript</span>
             </label>
+            <label className={styles.toggle}>
+              <input
+                type="checkbox"
+                checked={autoImport}
+                onChange={(e) => setAutoImport(e.target.checked)}
+                disabled={isLoading}
+              />
+              <span>Auto import</span>
+            </label>
           </div>
         </form>
 
-        {(phase === "loading" || phase === "done" || phase === "error") && (
+        {(phase === "loading" || phase === "review" || phase === "done" || phase === "error") && (
           <div className={styles.card}>
             {/* Recipe preview — appears as soon as metadata arrives */}
             {(recipeTitle || thumbnailUrl) && (
@@ -545,7 +629,22 @@ export default function App() {
                               ))}
                             </div>
                           )}
-                          {parsingDiff && (
+                          {showImportPreview && (
+                            <>
+                              <p><strong>Mealie import preview</strong></p>
+                              <p className={styles.previewHint}>
+                                This is the JSON payload that will be sent to Mealie when you import.
+                              </p>
+                              <textarea
+                                className={styles.detailsTextarea}
+                                readOnly
+                                value={JSON.stringify(parsingDetails.importPayload, null, 2)}
+                                aria-label="Mealie import payload preview"
+                              />
+                            </>
+                          )}
+
+                          {showDiffView && parsingDiff && (
                             <>
                               <div className={styles.diffSummaryGrid}>
                                 {parsingDiff.summary.map((item) => (
@@ -614,15 +713,17 @@ export default function App() {
                             />
                           </details>
 
-                          <details className={styles.rawDetails}>
-                            <summary className={styles.rawDetailsSummary}>Raw Mealie import payload</summary>
-                            <textarea
-                              className={styles.detailsTextarea}
-                              readOnly
-                              value={JSON.stringify(parsingDetails.importPayload, null, 2)}
+                          {showDiffView && (
+                            <details className={styles.rawDetails}>
+                              <summary className={styles.rawDetailsSummary}>Raw Mealie import payload</summary>
+                              <textarea
+                                className={styles.detailsTextarea}
+                                readOnly
+                                value={JSON.stringify(parsingDetails.importPayload, null, 2)}
                               aria-label="Mealie import payload JSON"
-                            />
-                          </details>
+                              />
+                            </details>
+                          )}
                         </div>
                       )}
                     </span>
@@ -630,6 +731,25 @@ export default function App() {
                 );
               })}
             </ol>
+
+            {showManualImportPanel && (
+              <div className={styles.manualImportPanel}>
+                <p className={styles.manualImportText}>
+                  Recipe generated. Review the payload above, then import it into Mealie when ready.
+                </p>
+                {manualImportError && (
+                  <p className={styles.manualImportError}>{manualImportError}</p>
+                )}
+                <button
+                  type="button"
+                  className={styles.manualImportButton}
+                  onClick={handleManualImport}
+                  disabled={isLoading}
+                >
+                  Import now
+                </button>
+              </div>
+            )}
 
             {/* Success banner */}
             {phase === "done" && recipeUrl && (

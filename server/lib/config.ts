@@ -42,6 +42,17 @@ function optionalNumber(key: string, fallback: number): number {
   return n;
 }
 
+function optionalBoolean(key: string, fallback: boolean): boolean {
+  const val = process.env[key];
+  if (!val) return fallback;
+
+  const normalized = val.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+
+  throw new Error(`Environment variable ${key} must be a boolean, got: ${val}`);
+}
+
 function detectCookiesFile(): string | null {
   const candidate = resolve(process.cwd(), "cookies.txt");
   return existsSync(candidate) ? candidate : null;
@@ -61,6 +72,7 @@ export const config = {
   // Local Whisper (optional)
   whisperApiUrl: process.env["WHISPER_API_URL"] || null,
   whisperTimeoutMs: optionalNumber("WHISPER_TIMEOUT_MS", 15000),
+  skipLocalWhisper: optionalBoolean("SKIP_LOCAL_WHISPER", false),
 
   // yt-dlp cookies file (optional, Netscape format — needed for Instagram, etc.)
   // Auto-detects cookies.txt in project root; env var overrides.

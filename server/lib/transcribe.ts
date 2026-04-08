@@ -11,7 +11,9 @@ import { config } from "./config.js";
  * 2. On timeout or any error, fall back to the remote TRANSCRIPTION_MODEL via OpenRouter.
  */
 export async function transcribeAudio(audioFilePath: string): Promise<string> {
-  if (config.whisperApiUrl) {
+  if (config.skipLocalWhisper) {
+    console.log("[transcribe] SKIP_LOCAL_WHISPER is enabled, using remote transcription.");
+  } else if (config.whisperApiUrl) {
     try {
       console.log(`[transcribe] Trying local Whisper at ${config.whisperApiUrl}...`);
       const text = await transcribeWithWhisper(audioFilePath, config.whisperApiUrl);
