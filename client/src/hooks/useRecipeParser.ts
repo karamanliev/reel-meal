@@ -18,8 +18,14 @@ import {
 
 const CUSTOM_PROMPT_MAX_LENGTH = 400;
 
+function getInitialUrl(): string {
+  if (typeof window === "undefined") return "";
+
+  return new URLSearchParams(window.location.search).get("url")?.trim() ?? "";
+}
+
 export function useRecipeParser() {
-  const [url, setUrl] = useState("");
+  const [url, setUrl] = useState(getInitialUrl);
   const [translate, setTranslate] = useState(false);
   const [extractTranscript, setExtractTranscript] = useState(true);
   const [autoImport, setAutoImport] = useState(true);
