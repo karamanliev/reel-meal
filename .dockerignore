@@ -1,0 +1,14 @@
+node_modules
+client/node_modules
+client/dist
+dist
+.git
+.github
+.env
+cookies.txt
+npm-debug.log*
+client/npm-debug.log*
+README.md
+AGENT_MEMORY.md
+screenshot_desktop.png
+screenshot_mobile.png

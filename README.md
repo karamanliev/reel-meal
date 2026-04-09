@@ -49,6 +49,35 @@ Open:
 - frontend: `http://localhost:5173`
 - backend: `http://localhost:3000`
 
+## Docker
+
+Build it yourself:
+
+```bash
+docker compose up --build
+```
+
+Or run the published image from GitHub Container Registry:
+
+```bash
+docker run --rm -p 3000:3000 --env-file .env --tmpfs /tmp:size=2g,mode=1777 ghcr.io/karamanliev/reel-meal:latest
+```
+
+If you prefer Compose with the published image:
+
+```yaml
+services:
+  reel-meal:
+    image: ghcr.io/karamanliev/reel-meal:latest
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    restart: unless-stopped
+    tmpfs:
+      - /tmp:size=2g,mode=1777
+```
+
 ## Environment
 
 Required:
