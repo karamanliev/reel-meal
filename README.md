@@ -49,6 +49,25 @@ Open:
 - frontend: `http://localhost:5173`
 - backend: `http://localhost:3000`
 
+## Sharing to the app
+
+ReelMeal can prefill the URL input from a query param:
+
+```text
+https://your-domain.com/?url=<url-encoded-video-link>
+```
+
+This is useful for mobile sharing flows.
+
+- Android: when ReelMeal is installed as a PWA, it can appear in the system share sheet and receive shared links directly.
+- iPhone/iPad: iOS does not offer the same PWA share target support, but you can use a Shortcut that opens ReelMeal with the shared link in `?url=`.
+
+iOS Shortcut:
+
+- https://www.icloud.com/shortcuts/3d9043bcd7b14fe290ff826b11a426a3
+
+The shared link should be URL-encoded when building the `?url=` value.
+
 ## Docker
 
 Build it yourself:
