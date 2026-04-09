@@ -146,3 +146,7 @@ npm start
 - Instagram reels and posts
 - TikTok
 - other sites supported by `yt-dlp`
+
+## Todo
+
+- [ ] Video queuing
