@@ -119,23 +119,7 @@ a {
   text-transform: uppercase;
 }
 
-.neo-title {
-  margin: 0;
-  font-family: "Epilogue", "Trebuchet MS", sans-serif;
-  font-size: clamp(1.9rem, 3vw, 2.7rem);
-  font-weight: 900;
-  line-height: 0.95;
-  letter-spacing: -0.06em;
-}
 
-.neo-display {
-  margin: 0;
-  font-family: "Epilogue", "Trebuchet MS", sans-serif;
-  font-size: clamp(2rem, 5vw, 4rem);
-  font-weight: 900;
-  line-height: 0.9;
-  letter-spacing: -0.07em;
-}
 
 .neo-logo-text {
   position: relative;

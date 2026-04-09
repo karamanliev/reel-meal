@@ -52,11 +52,7 @@ export default defineConfig({
       "cursor-pointer inline-flex items-center justify-center gap-2 rounded-[6px] border-3 border-solid border-black px-5 py-3 font-ui text-[0.98rem] font-700 leading-none text-ink shadow-neo-sm transition-all duration-150 active:translate-x-[2px] active:translate-y-[2px] active:shadow-neo-pressed disabled:cursor-not-allowed disabled:opacity-60 disabled:translate-x-0 disabled:translate-y-0 disabled:shadow-neo-sm",
     "neo-btn-primary": "neo-btn bg-pink hover:bg-[#ff7fc7]",
     "neo-btn-secondary": "neo-btn bg-white hover:bg-[#fff2c6]",
-    "neo-btn-blue": "neo-btn bg-blue hover:bg-[#bddbf6]",
     "neo-input":
       "w-full rounded-[6px] border-3 border-solid border-black bg-white px-4 py-3 font-ui text-base font-500 text-ink shadow-neo-sm outline-none transition-all duration-150 placeholder:text-[#6e6e6e] focus:-translate-y-[1px] focus:shadow-neo",
-    "neo-microcopy": "text-sm font-ui font-500 leading-6 text-muted",
-    "neo-section-title":
-      "font-display text-[2rem] leading-[0.95] font-800 tracking-[-0.04em] text-ink sm:text-[2.7rem]",
   },
 });
