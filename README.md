@@ -73,8 +73,12 @@ services:
       - "3000:3000"
     env_file:
       - .env
+    volumes:
+      - ./cookies.txt:/app/cookies.txt:ro
     restart: unless-stopped
 ```
+
+The `cookies.txt` mount is optional, but useful for Instagram and other sources that need authenticated `yt-dlp` requests.
 
 ## Environment
 
@@ -99,6 +103,8 @@ See `.env.example` for the full list.
 ## Instagram notes
 
 Instagram often needs cookies. If a link works in your browser but not in ReelMeal, export a `cookies.txt` file for `yt-dlp` and place it in the project root.
+
+If you run ReelMeal in Docker, mount it into the container at `/app/cookies.txt`.
 
 Example:
 
