@@ -38,8 +38,8 @@ app.get("/api/health", (c) => c.json({ status: "ok", timestamp: new Date().toISO
 
 const CLIENT_DIST = "./client/dist";
 
-app.use("/assets/*", serveStatic({ root: CLIENT_DIST }));
-app.use("*", serveStatic({ root: CLIENT_DIST, path: "index.html" }));
+app.use("/*", serveStatic({ root: CLIENT_DIST }));
+app.get("*", serveStatic({ root: CLIENT_DIST, path: "index.html" }));
 
 // -------------------------------------------------------------------------
 // Start
