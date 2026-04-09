@@ -85,10 +85,23 @@ export interface AudioResult {
 }
 
 function ytdlp(args: string[]): Promise<{ stdout: string; stderr: string }> {
-  const finalArgs = config.ytdlpCookiesFile
-    ? ["--cookies", config.ytdlpCookiesFile, ...args]
-    : args;
-  return execFileAsync("yt-dlp", finalArgs, { maxBuffer: 50 * 1024 * 1024 });
+  const cookiesFile = config.ytdlpCookiesFile;
+
+  if (!cookiesFile) {
+    return execFileAsync("yt-dlp", args, { maxBuffer: 50 * 1024 * 1024 });
+  }
+
+  return withTempDir("recipe-cookies-", async (workDir) => {
+    const tempCookiesFile = join(workDir, "cookies.txt");
+    const cookies = await readFile(cookiesFile);
+    await writeFile(tempCookiesFile, cookies);
+
+    return execFileAsync(
+      "yt-dlp",
+      ["--cookies", tempCookiesFile, ...args],
+      { maxBuffer: 50 * 1024 * 1024 }
+    );
+  });
 }
 
 /**
