@@ -1,5 +1,5 @@
 const CACHE_NAME = "recipe-parser-v1";
-const PRECACHE_URLS = ["/", "/favicon.svg"];
+const PRECACHE_URLS = ["/"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
