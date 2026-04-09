@@ -14,6 +14,7 @@ import { StatusIcon } from "./StatusIcon";
 import { MetadataDetails } from "./MetadataDetails";
 import { TranscriptDetails } from "./TranscriptDetails";
 import { ParsingDetails } from "./ParsingDetails";
+import burgerAndChipsMascot from "../assets/images/burger_n_chips.png";
 
 interface ProgressCardProps {
   phase: Phase;
@@ -41,170 +42,192 @@ interface ProgressCardProps {
   reset: () => void;
 }
 
-const STATUS_COLORS: Record<
-  string,
-  { icon: string; label: string; message: string }
-> = {
+const STEP_ACCENT: Record<string, { surface: string; chip: string }> = {
   idle: {
-    icon: "text-surface-300 dark:text-surface-600",
-    label: "text-surface-400 dark:text-surface-500",
-    message: "text-surface-400 dark:text-surface-500",
+    surface: "bg-paper",
+    chip: "bg-sun",
   },
   loading: {
-    icon: "text-primary-500",
-    label: "text-surface-800 dark:text-surface-200",
-    message: "text-surface-500 dark:text-surface-400",
+    surface: "bg-blue",
+    chip: "bg-white",
   },
   done: {
-    icon: "text-fresh-500",
-    label: "text-surface-500 dark:text-surface-400",
-    message: "text-surface-400 dark:text-surface-500",
+    surface: "bg-lime",
+    chip: "bg-white",
   },
   error: {
-    icon: "text-danger-500",
-    label: "text-danger-500",
-    message: "text-danger-500/80",
+    surface: "bg-peach",
+    chip: "bg-white",
   },
 };
 
 export function ProgressCard(props: ProgressCardProps) {
   return (
-    <div className="card overflow-hidden">
-      {/* Recipe preview */}
+    <div className="flex flex-col gap-5">
       {(props.recipeTitle || props.thumbnailUrl) && (
-        <div className="relative">
+        <div className="neo-card overflow-hidden animate-bounce-in bg-white">
           {props.thumbnailUrl && (
-            <img
-              className="w-full aspect-video object-cover block"
-              src={props.thumbnailUrl}
-              alt={props.recipeTitle ?? "Recipe thumbnail"}
-            />
+            <div className="border-b-4 border-solid border-black bg-[#f5f5f5]">
+              <img
+                className="block h-[320px] w-full object-cover sm:h-[420px]"
+                src={props.thumbnailUrl}
+                alt={props.recipeTitle ?? "Recipe thumbnail"}
+              />
+            </div>
           )}
-          {props.recipeTitle && (
-            <h2 className="absolute bottom-0 left-0 right-0 m-0 px-4 pt-8 pb-3 text-lg font-semibold text-white bg-gradient-to-t from-black/75 to-transparent leading-snug">
-              {props.recipeTitle}
-            </h2>
-          )}
+
+          <div className="p-5 sm:p-6">
+            <span className="neo-tag bg-sun">Recipe preview</span>
+            {props.recipeTitle && (
+              <h2 className="mt-4 font-display text-[1.8rem] leading-[0.96] font-800 tracking-[-0.05em] text-ink sm:text-[2.35rem]">
+                {props.recipeTitle}
+              </h2>
+            )}
+            <p className="neo-note mt-3">
+              ReelMeal has extracted the title and thumbnail for the selected
+              clip.
+            </p>
+          </div>
         </div>
       )}
 
-      {/* Step progress list */}
-      <ol className="list-none m-0 py-2 px-0">
-        {STEPS.map((step) => {
-          const state = props.steps[step.id];
-          const colors = STATUS_COLORS[state.status];
-          const hasDetails =
-            (step.id === "metadata" && Boolean(props.metadataDetails)) ||
-            (step.id === "transcript" && Boolean(props.transcriptDetails)) ||
-            (step.id === "parsing" && Boolean(props.parsingDetails));
-          const detailsOpen = Boolean(props.expandedDetails[step.id]);
+      {STEPS.map((step) => {
+        const state = props.steps[step.id];
+        const accent = STEP_ACCENT[state.status];
+        const hasDetails =
+          (step.id === "metadata" && Boolean(props.metadataDetails)) ||
+          (step.id === "transcript" && Boolean(props.transcriptDetails)) ||
+          (step.id === "parsing" && Boolean(props.parsingDetails));
+        const detailsOpen = Boolean(props.expandedDetails[step.id]);
 
-          return (
-            <li key={step.id} className="flex items-start gap-3 px-4 py-2.5">
-              <span
-                className={`shrink-0 mt-0.5 flex items-center justify-center ${colors.icon}`}
-                aria-hidden="true"
-              >
+        return (
+          <div
+            key={step.id}
+            className={`step-card animate-bounce-in rounded-[18px] border-4 border-solid border-black p-4 shadow-neo sm:p-5 ${accent.surface}`}
+          >
+            <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-3 sm:gap-x-4 sm:gap-y-2">
+              <div className="neo-card-soft flex h-12 w-12 shrink-0 items-center justify-center bg-white">
                 <StatusIcon status={state.status} />
-              </span>
-              <span className="flex flex-col gap-0.5 flex-1 min-w-0">
-                <span className={`text-sm font-medium ${colors.label}`}>
-                  {step.label}
-                </span>
+              </div>
+
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={`neo-tag ${accent.chip}`}>{step.label}</span>
+                </div>
+
                 {state.message && (
-                  <span className={`text-xs ${colors.message}`}>
+                  <p className="mt-3 text-[1.02rem] leading-6 font-600 text-ink break-anywhere">
                     {state.message}
-                  </span>
+                  </p>
                 )}
-                {hasDetails && (
+              </div>
+
+              {hasDetails && (
+                <div className="col-span-2 sm:col-span-1 sm:col-start-2 sm:justify-self-end">
                   <button
                     type="button"
-                    className="self-start mt-1 px-2 py-0.5 text-xs text-surface-500 dark:text-surface-400 bg-transparent border border-surface-200 dark:border-surface-700 rounded cursor-pointer hover:border-surface-400 dark:hover:border-surface-500 hover:text-surface-700 dark:hover:text-surface-300 transition-colors duration-150"
+                    className="neo-btn-secondary w-full px-4 py-2 text-sm sm:w-auto"
                     onClick={() => props.toggleDetails(step.id)}
                   >
                     {detailsOpen ? "Hide details" : "Show details"}
                   </button>
-                )}
-                {step.id === "metadata" &&
-                  detailsOpen &&
-                  props.metadataDetails && (
-                    <MetadataDetails details={props.metadataDetails} />
-                  )}
-                {step.id === "transcript" &&
-                  detailsOpen &&
-                  props.transcriptDetails && (
-                    <TranscriptDetails details={props.transcriptDetails} />
-                  )}
-                {step.id === "parsing" &&
-                  detailsOpen &&
-                  props.parsingDetails && (
-                    <ParsingDetails
-                      details={props.parsingDetails}
-                      parsingDiff={props.parsingDiff}
-                      recipeFacts={props.recipeFacts}
-                      nutritionEntries={props.nutritionEntries}
-                      previewIngredients={props.previewIngredients}
-                      previewInstructions={props.previewInstructions}
-                      showDiffView={props.showDiffView}
-                      showImportPreview={props.showImportPreview}
-                    />
-                  )}
-              </span>
-            </li>
-          );
-        })}
-      </ol>
+                </div>
+              )}
+            </div>
 
-      {/* Manual import panel */}
+            {step.id === "metadata" && detailsOpen && props.metadataDetails && (
+              <MetadataDetails details={props.metadataDetails} />
+            )}
+            {step.id === "transcript" &&
+              detailsOpen &&
+              props.transcriptDetails && (
+                <TranscriptDetails details={props.transcriptDetails} />
+              )}
+            {step.id === "parsing" && detailsOpen && props.parsingDetails && (
+              <ParsingDetails
+                details={props.parsingDetails}
+                parsingDiff={props.parsingDiff}
+                recipeFacts={props.recipeFacts}
+                nutritionEntries={props.nutritionEntries}
+                previewIngredients={props.previewIngredients}
+                previewInstructions={props.previewInstructions}
+                showDiffView={props.showDiffView}
+                showImportPreview={props.showImportPreview}
+              />
+            )}
+          </div>
+        );
+      })}
+
       {props.showManualImportPanel && (
-        <div className="px-4 py-3 border-t border-surface-200 dark:border-surface-800 flex items-center justify-between gap-4 flex-wrap bg-fresh-500/4">
-          <p className="m-0 text-sm text-surface-600 dark:text-surface-400 flex-1 min-w-65">
-            Recipe generated. Review the payload above, then import it into
-            Mealie when ready.
-          </p>
-          {props.manualImportError && (
-            <p className="m-0 w-full text-xs text-danger-400">
-              {props.manualImportError}
-            </p>
-          )}
-          <button
-            type="button"
-            className="btn-primary text-sm px-4 py-2"
-            onClick={props.handleManualImport}
-            disabled={props.isLoading}
-          >
-            Import now
-          </button>
+        <div className="neo-card animate-bounce-in bg-blue p-4 sm:p-5">
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div className="min-w-0 flex-1">
+              <span className="neo-tag bg-white">Manual import</span>
+              <p className="mt-3 text-[1rem] leading-6 font-600 text-ink">
+                Recipe generated. Review the payload above, then send it to
+                Mealie when you are ready.
+              </p>
+              {props.manualImportError && (
+                <p className="mt-2 text-sm font-700 text-[#8d1e1e]">
+                  {props.manualImportError}
+                </p>
+              )}
+            </div>
+
+            <button
+              type="button"
+              className="neo-btn min-h-[52px] w-full whitespace-nowrap bg-sun text-[1.08rem] hover:bg-[#ffe08f] disabled:opacity-100 disabled:bg-[#e5e5e5] disabled:text-[#5b5b5b] disabled:shadow-neo-pressed xl:w-auto xl:min-w-48"
+              onClick={props.handleManualImport}
+              disabled={props.isLoading}
+            >
+              Import now
+            </button>
+          </div>
         </div>
       )}
 
-      {/* Success banner */}
       {props.phase === "done" && props.recipeUrl && (
-        <div className="px-4 py-3 border-t border-surface-200 dark:border-surface-800 flex items-center justify-between gap-4 flex-wrap bg-fresh-500/7">
-          <p className="m-0 text-sm text-fresh-600 dark:text-fresh-400">
-            Recipe imported successfully.
-          </p>
-          <a
-            href={props.recipeUrl}
-            className="text-sm font-semibold text-fresh-600 dark:text-fresh-400 no-underline px-3 py-1.5 border border-fresh-500 rounded-md hover:bg-fresh-500/15 transition-colors duration-150"
-          >
-            Open recipe &rarr;
-          </a>
+        <div className="neo-card animate-bounce-in bg-lime p-6 sm:p-7">
+          <div className="grid grid-cols-1 gap-4 sm:gap-5 md:grid-cols-[auto_minmax(0,1fr)_auto] md:items-center">
+            <div className="w-full md:w-auto">
+              <img
+                src={burgerAndChipsMascot}
+                alt=""
+                className="pointer-events-none mx-auto h-32 w-auto object-contain sm:h-40 md:mx-0"
+              />
+            </div>
+
+            <div className="w-full min-w-0">
+              <span className="neo-tag bg-white">Success</span>
+              <p className="mt-3 font-display text-[1.6rem] leading-none font-800 tracking-[-0.05em] text-ink sm:text-[1.9rem]">
+                Recipe imported successfully.
+              </p>
+            </div>
+
+            <a
+              href={props.recipeUrl}
+              className="neo-btn-secondary w-full justify-center no-underline md:w-auto"
+            >
+              Open recipe
+            </a>
+          </div>
         </div>
       )}
 
-      {/* Error banner */}
       {props.phase === "error" && (
-        <div className="px-4 py-3 border-t border-surface-200 dark:border-surface-800 flex items-center justify-between gap-4 flex-wrap bg-danger-500/7">
-          <p className="m-0 text-sm text-danger-500 flex-1">
-            {props.errorMessage}
-          </p>
-          <button
-            className="text-sm font-semibold text-danger-500 bg-transparent border border-danger-500 rounded-md px-3.5 py-1.5 cursor-pointer hover:bg-danger-500/15 transition-colors duration-150"
-            onClick={props.reset}
-          >
-            Try Again
-          </button>
+        <div className="neo-card animate-bounce-in bg-peach p-4 sm:p-5">
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div className="min-w-0 flex-1">
+              <span className="neo-tag bg-white">Something broke</span>
+              <p className="mt-3 text-[1rem] leading-6 font-600 text-ink">
+                {props.errorMessage}
+              </p>
+            </div>
+            <button className="neo-btn-primary" onClick={props.reset}>
+              Try again
+            </button>
+          </div>
         </div>
       )}
     </div>

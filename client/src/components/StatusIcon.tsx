@@ -4,53 +4,60 @@ export function StatusIcon({ status }: { status: StepStatus }) {
   switch (status) {
     case "done":
       return (
-        <svg viewBox="0 0 20 20" fill="currentColor" className="w-5 h-5">
+        <svg viewBox="0 0 24 24" fill="none" className="h-6 w-6">
+          <circle cx="12" cy="12" r="10" fill="#b9ef73" stroke="#171717" strokeWidth="2.5" />
           <path
-            fillRule="evenodd"
-            d="M16.707 5.293a1 1 0 0 1 0 1.414l-8 8a1 1 0 0 1-1.414 0l-4-4a1 1 0 0 1 1.414-1.414L8 12.586l7.293-7.293a1 1 0 0 1 1.414 0z"
-            clipRule="evenodd"
+            d="M7 12.5L10.5 16L17 9"
+            stroke="#171717"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
           />
         </svg>
       );
     case "loading":
       return (
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          className="w-5 h-5 animate-spin"
-        >
+        <svg viewBox="0 0 24 24" fill="none" className="h-6 w-6 animate-spin-slow">
           <circle
             cx="12"
             cy="12"
-            r="10"
-            stroke="currentColor"
+            r="9"
+            stroke="#171717"
+            strokeOpacity="0.18"
+            strokeWidth="3"
+          />
+          <path
+            d="M12 3A9 9 0 0 1 21 12"
+            stroke="#171717"
             strokeWidth="3"
             strokeLinecap="round"
-            strokeDasharray="32"
-            strokeDashoffset="12"
           />
         </svg>
       );
     case "error":
       return (
-        <svg viewBox="0 0 20 20" fill="currentColor" className="w-5 h-5">
+        <svg viewBox="0 0 24 24" fill="none" className="h-6 w-6">
+          <circle cx="12" cy="12" r="10" fill="#ff9485" stroke="#171717" strokeWidth="2.5" />
           <path
-            fillRule="evenodd"
-            d="M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0zm-7 4a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm-1-9a1 1 0 0 0-1 1v4a1 1 0 1 0 2 0V6a1 1 0 0 0-1-1z"
-            clipRule="evenodd"
+            d="M8.5 8.5L15.5 15.5M15.5 8.5L8.5 15.5"
+            stroke="#171717"
+            strokeWidth="2.5"
+            strokeLinecap="round"
           />
         </svg>
       );
     default:
       return (
-        <svg
-          viewBox="0 0 20 20"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          className="w-5 h-5"
-        >
-          <circle cx="10" cy="10" r="7" />
+        <svg viewBox="0 0 24 24" fill="none" className="h-6 w-6">
+          <circle
+            cx="12"
+            cy="12"
+            r="10"
+            fill="#fffaf2"
+            stroke="#171717"
+            strokeWidth="2.5"
+            strokeDasharray="5 3"
+          />
         </svg>
       );
   }

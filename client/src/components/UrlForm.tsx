@@ -1,3 +1,5 @@
+import eggsAndBaconMascot from "../assets/images/egss_n_bacon.png";
+
 interface UrlFormProps {
   url: string;
   setUrl: (url: string) => void;
@@ -16,7 +18,7 @@ interface UrlFormProps {
   onSubmit: (e: React.FormEvent) => void;
 }
 
-function Toggle({
+function ToggleButton({
   checked,
   onChange,
   disabled,
@@ -28,15 +30,28 @@ function Toggle({
   label: string;
 }) {
   return (
-    <label className="inline-flex items-center gap-2 text-sm text-surface-500 dark:text-surface-400 cursor-pointer select-none py-0.5 has-[input:disabled]:opacity-40 has-[input:disabled]:cursor-not-allowed">
+    <label
+      data-checked={checked}
+      data-disabled={disabled}
+      className="neo-toggle"
+    >
       <input
         type="checkbox"
         checked={checked}
         onChange={(e) => onChange(e.target.checked)}
         disabled={disabled}
-        className="appearance-none w-4 h-4 border border-surface-300 dark:border-surface-600 rounded bg-surface-100 dark:bg-surface-800 cursor-pointer shrink-0 transition-colors duration-150 checked:bg-primary-500 checked:border-primary-500 relative checked:after:content-[''] checked:after:absolute checked:after:top-[1px] checked:after:left-[4px] checked:after:w-[4px] checked:after:h-[7px] checked:after:border-2 checked:after:border-white checked:after:border-t-0 checked:after:border-l-0 checked:after:rotate-45 disabled:opacity-40 disabled:cursor-not-allowed"
       />
-      <span>{label}</span>
+
+      <span className="neo-toggle__track" aria-hidden="true">
+        <span className="neo-toggle__thumb" />
+      </span>
+
+      <span className="neo-toggle__body">
+        <span className="neo-toggle__label">{label}</span>
+        <span className="neo-toggle__meta">
+          {checked ? "Enabled" : "Disabled"}
+        </span>
+      </span>
     </label>
   );
 }
@@ -59,75 +74,111 @@ export function UrlForm({
   onSubmit,
 }: UrlFormProps) {
   return (
-    <form className="w-full" onSubmit={onSubmit}>
-      <div className="flex flex-col sm:flex-row gap-2">
-        <input
-          className="input-field flex-1"
-          type="url"
-          placeholder="Paste a YouTube or Instagram video URL..."
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          disabled={isLoading}
-          required
-          autoFocus
-        />
-        <button
-          className="btn-primary w-full sm:w-auto whitespace-nowrap"
-          type="submit"
-          disabled={isLoading || !url.trim()}
-        >
-          {isLoading
-            ? "Processing..."
-            : autoImport
-              ? "Import Recipe"
-              : "Generate Recipe"}
-        </button>
-      </div>
+    <form className="w-full animate-bounce-in" onSubmit={onSubmit}>
+      <div className="overflow-hidden rounded-[24px] border-4 border-solid border-black shadow-neo">
+        <div className="relative bg-pink px-5 py-5 sm:px-7 sm:py-7 lg:min-h-[520px]">
+          <p className="max-w-3xl neo-copy text-ink font-300">
+            Paste a YouTube, Instagram, or TikTok link. ReelMeal extracts the
+            recipe, normalizes the output, and gets it ready for Mealie.
+          </p>
 
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-1 mt-3">
-        <Toggle
-          checked={translate}
-          onChange={setTranslate}
-          disabled={isLoading}
-          label="Translate to English"
-        />
-        <Toggle
-          checked={useCustomPrompt}
-          onChange={setUseCustomPrompt}
-          disabled={isLoading}
-          label="Custom prompt"
-        />
-        <Toggle
-          checked={extractTranscript}
-          onChange={setExtractTranscript}
-          disabled={isLoading}
-          label="Extract transcript"
-        />
-        <Toggle
-          checked={autoImport}
-          onChange={setAutoImport}
-          disabled={isLoading}
-          label="Auto import"
-        />
-      </div>
+          <div className="mt-6 flex flex-col gap-3 max-w-4xl xl:flex-row">
+            <input
+              className="neo-input min-h-[58px] flex-1"
+              type="url"
+              placeholder="https://youtube.com/watch?v=..."
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              disabled={isLoading}
+              required
+              autoFocus
+            />
 
-      {useCustomPrompt && (
-        <div className="mt-3">
-          <textarea
-            className="input-field min-h-26 resize-y font-inherit leading-relaxed"
-            value={customPrompt}
-            onChange={(e) => setCustomPrompt(e.target.value)}
-            placeholder='Add extra instructions for the parser. Example: "Prefer metric units" or "Keep steps extra concise".'
-            disabled={isLoading}
-            maxLength={customPromptMaxLength}
-            rows={4}
-          />
-          <div className="mt-1 text-xs text-surface-400 dark:text-surface-500">
-            Extra instructions are added on top of the built-in parser prompt.
-            Keep it short.
+            <button
+              className="neo-btn min-h-[52px] w-full whitespace-nowrap bg-sun text-[1.08rem] hover:bg-[#ffe08f] disabled:opacity-100 disabled:bg-[#e5e5e5] disabled:text-[#5b5b5b] disabled:shadow-neo-pressed xl:w-auto xl:min-w-48"
+              type="submit"
+              disabled={isLoading || !url.trim()}
+            >
+              {isLoading
+                ? "Processing..."
+                : autoImport
+                  ? "Import recipe"
+                  : "Generate recipe"}
+            </button>
           </div>
+
+          <p className="mt-8 max-w-2xl text-[0.98rem] leading-6 font-300 text-ink">
+            Use the toggles to control translation, transcript extraction,
+            custom prompting, and direct import.
+          </p>
+
+          <div className="mt-6 grid md:grid-cols-2 gap-3 max-w-2xl">
+            <ToggleButton
+              checked={translate}
+              onChange={setTranslate}
+              disabled={isLoading}
+              label="Translate to English"
+            />
+            <ToggleButton
+              checked={useCustomPrompt}
+              onChange={setUseCustomPrompt}
+              disabled={isLoading}
+              label="Use a custom prompt"
+            />
+            <ToggleButton
+              checked={extractTranscript}
+              onChange={setExtractTranscript}
+              disabled={isLoading}
+              label="Extract transcript"
+            />
+            <ToggleButton
+              checked={autoImport}
+              onChange={setAutoImport}
+              disabled={isLoading}
+              label="Auto-import to Mealie"
+            />
+          </div>
+
+          {useCustomPrompt && (
+            <div className="mt-7 max-w-xl">
+              <div className="flex items-center justify-between gap-3">
+                <p className="neo-overline !text-[#fffdfd]">
+                  Custom parser instructions
+                </p>
+                <span
+                  className="text-[0.78rem] font-ui font-700"
+                  style={{ color: "#fffdfd" }}
+                >
+                  {customPrompt.length}/{customPromptMaxLength}
+                </span>
+              </div>
+
+              <textarea
+                className="neo-textarea mt-3 min-h-32"
+                value={customPrompt}
+                onChange={(e) => setCustomPrompt(e.target.value)}
+                placeholder='Add extra instructions, like "prefer metric units" or "keep steps concise".'
+                disabled={isLoading}
+                maxLength={customPromptMaxLength}
+                rows={4}
+              />
+
+              <p
+                className="m-0 mt-3 text-[0.92rem] font-600 italic opacity-80"
+                style={{ color: "#fffdfd" }}
+              >
+                These instructions are appended to the built-in parser prompt.
+              </p>
+            </div>
+          )}
+
+          <img
+            src={eggsAndBaconMascot}
+            alt=""
+            className="pointer-events-none absolute right-[-45px] top-[215px] xl:top-[145px] hidden h-[305px] lg:block xl:h-[375px]"
+          />
         </div>
-      )}
+      </div>
     </form>
   );
 }

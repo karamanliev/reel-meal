@@ -6,87 +6,57 @@ import {
 } from "unocss";
 
 export default defineConfig({
-  presets: [
-    presetWind({
-      dark: "media",
-    }),
-  ],
+  presets: [presetWind()],
   transformers: [transformerDirectives(), transformerVariantGroup()],
   theme: {
     colors: {
-      primary: {
-        50: "#fff7ed",
-        100: "#ffedd5",
-        200: "#fed7aa",
-        300: "#fdba74",
-        400: "#fb923c",
-        500: "#f97316",
-        600: "#ea580c",
-        700: "#c2410c",
-        800: "#9a3412",
-        900: "#7c2d12",
-        950: "#431407",
-      },
-      fresh: {
-        50: "#f0fdf4",
-        100: "#dcfce7",
-        200: "#bbf7d0",
-        300: "#86efac",
-        400: "#4ade80",
-        500: "#22c55e",
-        600: "#16a34a",
-        700: "#15803d",
-        800: "#166534",
-        900: "#14532d",
-      },
-      surface: {
-        50: "#faf8f6",
-        100: "#f5f0ec",
-        200: "#e8e0d8",
-        300: "#d4c8bc",
-        400: "#b8a898",
-        500: "#9a8878",
-        600: "#7a6a5c",
-        700: "#504840",
-        800: "#2a2520",
-        900: "#1a1714",
-        950: "#0f0d0b",
-      },
-      danger: {
-        50: "#fef2f2",
-        100: "#fee2e2",
-        200: "#fecaca",
-        300: "#fca5a5",
-        400: "#f87171",
-        500: "#ef4444",
-        600: "#dc2626",
-        700: "#b91c1c",
-      },
-      warning: {
-        50: "#fffbeb",
-        100: "#fef3c7",
-        200: "#fde68a",
-        300: "#fcd34d",
-        400: "#fbbf24",
-        500: "#f59e0b",
-        600: "#d97706",
-      },
+      ink: "#171717",
+      page: "#68efc1",
+      paper: "#fffaf2",
+      white: "#ffffff",
+      sun: "#fdd36b",
+      pink: "#ff63b7",
+      blue: "#a9d0f3",
+      lime: "#cdf86c",
+      peach: "#ffc8a9",
+      success: "#b9ef73",
+      danger: "#ff9485",
+      warning: "#ffd96a",
+      muted: "#5e5e5e",
+      mutedlight: "#8b8b8b",
     },
     fontFamily: {
-      sans: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+      display: "'Epilogue', 'Trebuchet MS', sans-serif",
+      ui: "'Epilogue', 'Trebuchet MS', sans-serif",
       mono: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+    },
+    boxShadow: {
+      neo: "6px 6px 0px #171717",
+      "neo-sm": "4px 4px 0px #171717",
+      "neo-xs": "3px 3px 0px #171717",
+      "neo-pressed": "1px 1px 0px #171717",
     },
   },
   shortcuts: {
-    "btn":
-      "inline-flex items-center justify-center rounded-lg font-medium transition-colors duration-150 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed",
-    "btn-primary":
-      "btn bg-primary-500 hover:bg-primary-600 active:bg-primary-700 text-white px-5 py-2.5 min-h-11",
-    "btn-ghost":
-      "btn text-surface-600 dark:text-surface-400 hover:bg-surface-100 dark:hover:bg-surface-800 px-3 py-2",
-    "card":
-      "rounded-xl bg-white dark:bg-surface-900 border border-surface-200 dark:border-surface-800 shadow-sm dark:shadow-none",
-    "input-field":
-      "w-full rounded-lg border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-800 text-surface-900 dark:text-surface-100 px-4 py-2.5 min-h-11 outline-none transition-colors duration-150 focus:border-primary-400 dark:focus:border-primary-500 focus:ring-2 focus:ring-primary-400/20 placeholder:text-surface-400 dark:placeholder:text-surface-500",
+    "neo-card":
+      "rounded-[18px] border-4 border-solid border-black bg-paper shadow-neo",
+    "neo-card-soft":
+      "rounded-[9999px] border-4 border-solid border-black bg-white shadow-neo-sm",
+    "neo-bar":
+      "rounded-[16px] border-4 border-solid border-black bg-sun shadow-neo",
+    "neo-subpanel":
+      "rounded-[8px] border-4 border-solid border-black bg-white shadow-neo-sm",
+    "neo-tag":
+      "inline-flex items-center justify-center rounded-full border-2 border-ink bg-white px-3 py-1 text-[0.72rem] font-ui font-800 uppercase tracking-[0.12em] text-ink",
+    "neo-btn":
+      "cursor-pointer inline-flex items-center justify-center gap-2 rounded-[6px] border-3 border-solid border-black px-5 py-3 font-ui text-[0.98rem] font-700 leading-none text-ink shadow-neo-sm transition-all duration-150 active:translate-x-[2px] active:translate-y-[2px] active:shadow-neo-pressed disabled:cursor-not-allowed disabled:opacity-60 disabled:translate-x-0 disabled:translate-y-0 disabled:shadow-neo-sm",
+    "neo-btn-primary": "neo-btn bg-pink hover:bg-[#ff7fc7]",
+    "neo-btn-secondary": "neo-btn bg-white hover:bg-[#fff2c6]",
+    "neo-btn-blue": "neo-btn bg-blue hover:bg-[#bddbf6]",
+    "neo-input":
+      "w-full rounded-[6px] border-3 border-solid border-black bg-white px-4 py-3 font-ui text-base font-500 text-ink shadow-neo-sm outline-none transition-all duration-150 placeholder:text-[#6e6e6e] focus:-translate-y-[1px] focus:shadow-neo",
+    "neo-microcopy": "text-sm font-ui font-500 leading-6 text-muted",
+    "neo-section-title":
+      "font-display text-[2rem] leading-[0.95] font-800 tracking-[-0.04em] text-ink sm:text-[2.7rem]",
   },
 });

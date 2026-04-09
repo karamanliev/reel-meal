@@ -1,17 +1,23 @@
 {
-  "name": "Recipe Parser",
-  "short_name": "Recipe Parser",
-  "description": "Import recipes from YouTube & Instagram into Mealie",
+  "name": "ReelMeal",
+  "short_name": "ReelMeal",
+  "description": "From Reels to Meals — import recipes from YouTube & Instagram into Mealie",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#faf8f6",
-  "theme_color": "#f97316",
+  "background_color": "#fffdf9",
+  "theme_color": "#ffa8a8",
   "icons": [
     {
-      "src": "/favicon.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
-      "purpose": "any maskable"
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
     }
   ]
 }

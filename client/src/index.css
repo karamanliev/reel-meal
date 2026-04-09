@@ -1,13 +1,304 @@
-*, *::before, *::after {
+@import url("https://fonts.googleapis.com/css2?family=Epilogue:wght@400;500;600;700;800;900&display=swap");
+
+*,
+*::before,
+*::after {
   box-sizing: border-box;
+}
+
+:root {
+  color: #171717;
+  background: #68efc1;
+  font-family: "Epilogue", "Trebuchet MS", sans-serif;
 }
 
 body {
   margin: 0;
+  color: #171717;
+  background: #68efc1;
+  font-family: "Epilogue", "Trebuchet MS", sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+a {
+  color: inherit;
+}
+
 #root {
   min-height: 100dvh;
+}
+
+.neo-page-bg {
+  background-color: #68efc1;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.24) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.24) 1px, transparent 1px),
+    radial-gradient(
+      circle at top left,
+      rgba(255, 255, 255, 0.2),
+      transparent 32%
+    ),
+    radial-gradient(
+      circle at bottom right,
+      rgba(0, 0, 0, 0.05),
+      transparent 30%
+    );
+  background-size:
+    36px 36px,
+    36px 36px,
+    100% 100%,
+    100% 100%;
+}
+
+@keyframes bounce-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.96) translateY(10px);
+  }
+
+  60% {
+    transform: scale(1.01) translateY(-2px);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-bounce-in {
+  animation: bounce-in 0.4s ease-out both;
+}
+
+.animate-spin-slow {
+  animation: spin 1.2s linear infinite;
+}
+
+.step-card:nth-child(1) {
+  animation-delay: 0ms;
+}
+
+.step-card:nth-child(2) {
+  animation-delay: 70ms;
+}
+
+.step-card:nth-child(3) {
+  animation-delay: 140ms;
+}
+
+.step-card:nth-child(4) {
+  animation-delay: 210ms;
+}
+
+.neo-overline {
+  color: #6e8539;
+  margin: 0;
+  margin-top: 16px;
+  font-size: 0.76rem;
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.neo-title {
+  margin: 0;
+  font-family: "Epilogue", "Trebuchet MS", sans-serif;
+  font-size: clamp(1.9rem, 3vw, 2.7rem);
+  font-weight: 900;
+  line-height: 0.95;
+  letter-spacing: -0.06em;
+}
+
+.neo-display {
+  margin: 0;
+  font-family: "Epilogue", "Trebuchet MS", sans-serif;
+  font-size: clamp(2rem, 5vw, 4rem);
+  font-weight: 900;
+  line-height: 0.9;
+  letter-spacing: -0.07em;
+}
+
+.neo-logo-text {
+  position: relative;
+  display: inline-block;
+  font-family: "Epilogue", "Trebuchet MS", sans-serif;
+  font-weight: 900;
+  line-height: 0.9;
+  letter-spacing: -0.06em;
+  color: #fff;
+  transform: scaleX(1.06);
+  transform-origin: left center;
+  text-shadow:
+    -2px 0 0 #000,
+    2px 0 0 #000,
+    0 -2px 0 #000,
+    0 2px 0 #000,
+    -2px -2px 0 #000,
+    2px -2px 0 #000,
+    -2px 2px 0 #000,
+    2px 2px 0 #000;
+  z-index: 1;
+}
+
+.neo-logo-text::before {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  transform: translate(0, 0.15em);
+  color: #000;
+  z-index: -1;
+}
+
+.neo-copy {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 500;
+  line-height: 1.65;
+  color: #313131;
+}
+
+.neo-note {
+  margin: 0;
+  font-size: 0.88rem;
+  font-weight: 600;
+  line-height: 1.45;
+  font-style: italic;
+  color: #5e5e5e;
+}
+
+.neo-toggle {
+  position: relative;
+  display: inline-flex;
+  width: 100%;
+  min-height: 0;
+  align-items: center;
+  gap: 0.9rem;
+  background: transparent;
+  padding: 0;
+  color: #171717;
+  cursor: pointer;
+  user-select: none;
+}
+
+.neo-toggle input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.neo-toggle__track {
+  position: relative;
+  width: 58px;
+  height: 34px;
+  flex: 0 0 auto;
+  border: 3px solid #171717;
+  border-radius: 999px;
+  background: #e5e5e5;
+  box-shadow: 2px 2px 0 #171717;
+}
+
+.neo-toggle__thumb {
+  position: absolute;
+  top: 3px;
+  left: 2px;
+  width: 22px;
+  height: 22px;
+  border: 3px solid #171717;
+  border-radius: 999px;
+  background: #fffaf2;
+  box-shadow: 1px 1px 0 #171717;
+  transition: transform 0.2s ease;
+}
+
+.neo-toggle__body {
+  display: grid;
+  gap: 0.12rem;
+  min-width: 0;
+}
+
+.neo-toggle__label {
+  font-size: 0.96rem;
+  font-weight: 700;
+  line-height: 1.15;
+}
+
+.neo-toggle__meta {
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #f7f7f7;
+}
+
+.neo-toggle[data-checked="true"] .neo-toggle__track {
+  background: #a9d0f3;
+}
+
+.neo-toggle[data-checked="true"] .neo-toggle__thumb {
+  transform: translateX(24px);
+}
+
+.neo-toggle[data-disabled="true"] {
+  cursor: not-allowed;
+}
+
+textarea.neo-textarea {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-height: 10rem;
+  border: 3px solid #171717;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 4px 4px 0 #171717;
+  padding: 0.9rem 1rem;
+  font-size: 0.94rem;
+  font-weight: 500;
+  line-height: 1.55;
+  color: #171717;
+  outline: none;
+  resize: vertical;
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+textarea.neo-textarea:focus {
+  transform: translateY(-1px);
+  box-shadow: 6px 6px 0 #171717;
+}
+
+details.neo-details > summary {
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+details.neo-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+details.neo-details[open] > summary {
+  border-bottom: 3px solid #171717;
 }

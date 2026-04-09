@@ -1,28 +1,30 @@
+import saladMascot from "../assets/images/salad.png";
+
 export function Header() {
   return (
-    <header className="flex items-center gap-3 mb-6">
-      <div className="w-9 h-9 text-primary-500 shrink-0" aria-hidden="true">
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          className="w-full h-full"
-        >
-          <path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2" />
-          <path d="M7 2v20" />
-          <path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7" />
-        </svg>
-      </div>
-      <div>
-        <h1 className="text-xl font-bold tracking-tight text-surface-900 dark:text-surface-50 m-0">
-          Recipe Parser
-        </h1>
-        <p className="text-sm text-surface-500 dark:text-surface-400 m-0">
-          Import recipes from YouTube & Instagram into Mealie
-        </p>
+    <header className="w-full animate-bounce-in">
+      <div className="neo-bar relative overflow-hidden px-4 py-3 pr-6 sm:px-5 sm:py-4 sm:pr-8">
+        <div className="flex flex-wrap items-center justify-between gap-3 sm:gap-4">
+          <div className="flex min-w-0 items-center gap-3 sm:gap-4">
+            <div className="relative flex h-18 w-18 shrink-0 items-center justify-center sm:h-[5.25rem] sm:w-[5.25rem]">
+              <img
+                src={saladMascot}
+                alt=""
+                className="pointer-events-none h-16 w-auto object-contain sm:h-20"
+              />
+            </div>
+
+            <h1 className="m-0 text-[2.9rem] leading-none sm:text-[3.9rem]">
+              <span data-text="ReelMeal" className="neo-logo-text">
+                ReelMeal
+              </span>
+            </h1>
+          </div>
+
+          <p className="m-0 text-[1.2rem] leading-[1.2] font-400 italic text-ink sm:text-[1.35rem]">
+            From reels to meals
+          </p>
+        </div>
       </div>
     </header>
   );
