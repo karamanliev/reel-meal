@@ -122,10 +122,74 @@ function isGenericTitle(title: string, uploader: string): boolean {
   if (!title) return true;
   const lower = title.toLowerCase();
   return (
+    /^video\s+\d+$/i.test(title) ||
     lower.startsWith("video by ") ||
     lower.startsWith("post by ") ||
     lower === uploader
   );
+}
+
+function isInstagramPostUrl(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  return /instagram\.com\/p\//i.test(value);
+}
+
+function extractTitleFromDescription(description: string): string | null {
+  const lines = description
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("#"));
+
+  if (!lines.length) return null;
+
+  const firstLine = lines[0];
+  const recipePhraseMatch = firstLine.match(/(?:these|this|my|our)\s+(.+?)(?:[.!?]|$)/i);
+  if (recipePhraseMatch) {
+    const cleaned = recipePhraseMatch[1]
+      .replace(/\s+all\s+for\s+.+$/i, "")
+      .replace(/\s+by\s+@\S+.*$/i, "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (cleaned.length >= 6 && cleaned.length <= 90) return cleaned;
+  }
+
+  let title = firstLine;
+  if (lines[1] && title.length < 60 && !/[.!?]$/.test(title)) {
+    const combined = `${title} ${lines[1]}`.replace(/\s+/g, " ").trim();
+    if (combined.length <= 110) {
+      title = combined;
+    }
+  }
+
+  return title;
+}
+
+async function enrichInstagramPostMetadata(
+  url: string,
+  data: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  const hasUsefulDescription = typeof data.description === "string" && data.description.trim().length > 0;
+  const uploader = String(data.uploader ?? data.channel ?? "").trim().toLowerCase();
+  const hasUsefulTitle = !isGenericTitle(String(data.title ?? "").trim(), uploader);
+
+  if (hasUsefulDescription && hasUsefulTitle) return data;
+  if (!isInstagramPostUrl(data.webpage_url ?? url)) return data;
+
+  const { stdout } = await ytdlp(["-J", url]);
+  const playlistData = JSON.parse(stdout) as Record<string, unknown>;
+
+  if (playlistData._type !== "playlist") return data;
+
+  return {
+    ...playlistData,
+    ...data,
+    title: hasUsefulTitle ? data.title : playlistData.title ?? data.title,
+    description: hasUsefulDescription ? data.description : playlistData.description ?? data.description,
+    uploader: data.uploader ?? playlistData.uploader,
+    channel: data.channel ?? playlistData.channel,
+    webpage_url: data.webpage_url ?? playlistData.webpage_url,
+  };
 }
 
 function chooseBestTitle(data: Record<string, unknown>): string {
@@ -135,22 +199,7 @@ function chooseBestTitle(data: Record<string, unknown>): string {
 
   if (!isGenericTitle(rawTitle, uploader)) return rawTitle;
 
-  const lines = description
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0 && !line.startsWith("#"));
-
-  if (!lines.length) return rawTitle || "Untitled Recipe";
-
-  let title = lines[0];
-  if (lines[1] && title.length < 60 && !/[.!?]$/.test(title)) {
-    const combined = `${title} ${lines[1]}`.replace(/\s+/g, " ").trim();
-    if (combined.length <= 110) {
-      title = combined;
-    }
-  }
-
-  return title;
+  return extractTitleFromDescription(description) || rawTitle || "Untitled Recipe";
 }
 
 function decodeVttEntities(text: string): string {
@@ -171,7 +220,8 @@ export async function fetchMetadata(url: string): Promise<VideoMetadata> {
     url,
   ]);
 
-  const data = JSON.parse(stdout);
+  const initialData = JSON.parse(stdout) as Record<string, unknown>;
+  const data = await enrichInstagramPostMetadata(url, initialData);
 
   // yt-dlp returns an array of thumbnail objects, pick the best one
   const thumbnail =
