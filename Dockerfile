@@ -1,6 +1,6 @@
 # =============================================================================
-# Mealie Recipe Parser — Dockerfile
-# Multi-stage build: build frontend, then produce lean production image
+# ReelMeal — Dockerfile
+# Multi-stage build: build frontend + server, then produce lean production image
 # =============================================================================
 
 # ---------------------------------------------------------------------------
@@ -17,7 +17,21 @@ COPY client/ ./
 RUN npm run build
 
 # ---------------------------------------------------------------------------
-# Stage 2: Production image
+# Stage 2: Compile the server TypeScript
+# ---------------------------------------------------------------------------
+FROM node:22-alpine AS server-builder
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm ci
+
+COPY tsconfig.server.json ./
+COPY server/ ./server/
+RUN npx tsc -p tsconfig.server.json
+
+# ---------------------------------------------------------------------------
+# Stage 3: Production image
 # ---------------------------------------------------------------------------
 FROM node:22-alpine AS production
 
@@ -25,18 +39,16 @@ FROM node:22-alpine AS production
 #   python3 + pip3 → yt-dlp
 #   ffmpeg        → audio extraction (required by yt-dlp -x)
 RUN apk add --no-cache python3 py3-pip ffmpeg && \
-    pip3 install --break-system-packages yt-dlp
+    pip3 install --no-cache-dir --break-system-packages yt-dlp
 
 WORKDIR /app
 
-# Install server dependencies
+# Install only production dependencies
 COPY package*.json ./
 RUN npm ci --omit=dev
 
-# Copy server source and compile
-COPY tsconfig.server.json ./
-COPY server/ ./server/
-RUN npx tsc -p tsconfig.server.json
+# Copy compiled server from stage 2
+COPY --from=server-builder /app/dist ./dist
 
 # Copy built frontend from stage 1
 COPY --from=frontend-builder /app/client/dist ./client/dist
