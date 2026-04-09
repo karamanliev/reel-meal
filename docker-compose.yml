@@ -7,6 +7,3 @@ services:
     env_file:
       - .env
     restart: unless-stopped
-    # Writable /tmp for yt-dlp temp files (audio, subtitles, thumbnails)
-    tmpfs:
-      - /tmp:size=2g,mode=1777
