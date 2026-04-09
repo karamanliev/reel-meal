@@ -24,7 +24,7 @@ FROM node:22-alpine AS server-builder
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci
+RUN npm ci --ignore-scripts
 
 COPY tsconfig.server.json ./
 COPY server/ ./server/
@@ -45,7 +45,7 @@ WORKDIR /app
 
 # Install only production dependencies
 COPY package*.json ./
-RUN npm ci --omit=dev
+RUN npm ci --omit=dev --ignore-scripts
 
 # Copy compiled server from stage 2
 COPY --from=server-builder /app/dist ./dist
