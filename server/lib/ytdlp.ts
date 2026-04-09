@@ -235,11 +235,11 @@ export async function fetchMetadata(url: string): Promise<VideoMetadata> {
 
   return {
     title: chooseBestTitle(data),
-    description: data.description || "",
+    description: String(data.description ?? ""),
     thumbnailUrl: thumbnail || "",
-    duration: data.duration || 0,
-    uploader: data.uploader || data.channel || "",
-    webpageUrl: data.webpage_url || url,
+    duration: Number(data.duration ?? 0),
+    uploader: String(data.uploader ?? data.channel ?? ""),
+    webpageUrl: String(data.webpage_url ?? url),
     hasSubtitles: Boolean(subtitleLanguage),
     subtitleLanguage,
   };
