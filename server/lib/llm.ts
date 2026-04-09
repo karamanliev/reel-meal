@@ -100,6 +100,7 @@ Rules:
 - Use human-readable duration strings for times, such as "15 minutes", "35 min", or "1 hour 30 minutes".
 - If a value is not mentioned, use null (not empty string, not 0).
 - Only include recipeServings if the source EXPLICITLY states servings. Do not infer it.
+- Never translate, localize, or rewrite the recipe into another language unless the LANGUAGE rule below explicitly tells you to do so.
 - Prefer fewer, more meaningful instruction steps over many tiny ones.
   - Combine consecutive actions that naturally belong together in real cooking.
   - Usually a normal recipe should land around 6-10 steps, but adapt to recipe complexity.
@@ -124,27 +125,30 @@ Ingredient parsing rules — these are CRITICAL for correct import:
   - Fractions: "½" → 0.5, "1½" → 1.5, "¼" → 0.25.
 - unit.name: ONLY the measurement unit word, nothing else.
   - Keep the unit in the same language/script and style used by the source recipe.
-  - For Bulgarian recipes, prefer Bulgarian forms like "мл", "л", "г", "кг", "с.л.", "ч.л.", "бр." or Bulgarian unit words when that is how the source expresses them.
-  - Do NOT switch a Bulgarian unit into English words like "milliliter" or "gram" unless the source recipe itself is in English.
-  - Examples: "г", "кг", "мл", "л", "бр", "ч.л.", "с.л.", "щипка", "cup", "tbsp", "tsp", "oz".
-  - If there is no unit (e.g. "3 яйца"), set unit to null. "яйца" is a food, not a unit.
+  - Do NOT translate a unit into another language or expand it into a different style unless the source already does that.
+  - For example, if the source recipe is in Bulgarian, prefer Bulgarian forms like "мл", "л", "г", "кг", "с.л.", "ч.л.", "бр.", or other Bulgarian unit words exactly as the source uses them.
+  - Examples: "g", "kg", "ml", "l", "cup", "tbsp", "tsp", "oz", "pinch".
+  - If there is no unit (e.g. "3 eggs"), set unit to null. "eggs" is a food, not a unit.
   - Countable foods (eggs, onions, cloves) do NOT need a unit — set unit to null.
 - food.name: ONLY the ingredient name in its base/dictionary form.
   - NEVER include quantity, unit, or preparation details in food.name.
-  - Good: "пилешко филе", "лук", "чесън", "масло", "брашно", "яйца"
-  - Bad: "200г пилешко филе" (has quantity+unit), "нарязан лук" (has prep), "3 яйца" (has quantity)
+  - Keep ingredient names in the same language as the source unless translation is explicitly requested.
+  - Good: "chicken breast", "onion", "garlic", "butter", "flour", "eggs"
+  - Bad: "200 g chicken breast" (has quantity+unit), "chopped onion" (has prep), "3 eggs" (has quantity)
 - note: preparation details, qualifiers, or clarifications ONLY.
-  - Good: "нарязан на кубчета", "finely chopped", "at room temperature", "по желание"
+  - Keep notes in the same language as the source unless translation is explicitly requested.
+  - Good: "finely chopped", "at room temperature", "optional"
   - If there is nothing to note, use null (not empty string).
 - originalText: the FULL natural ingredient line as a human would read it.
-  - Example: "200 г пилешко филе, нарязано на кубчета"
+  - Keep originalText exactly in the source language/script.
+  - Example: "200 g chicken breast, diced"
 - NEVER duplicate quantity or unit text inside food.name or note.
 - If the ingredient structure is truly unclear, set quantity/unit/food to null and put everything in originalText + note so no information is lost.
 
 - LANGUAGE: {{LANGUAGE_RULE}}`;
 
 const LANGUAGE_RULE_KEEP =
-  "Keep ALL text (name, description, ingredients, instructions, notes) in the original language of the recipe. Do NOT translate anything.";
+  "Keep ALL text in the original language of the recipe, including name, description, ingredients, units, notes, instructions, categories, and tags. Do NOT translate, localize, or normalize text into another language.";
 
 const LANGUAGE_RULE_TRANSLATE =
   "Translate ALL text (name, description, ingredients, instructions, notes, categories, tags) into English.";
