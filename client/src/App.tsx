@@ -2,12 +2,14 @@ import { useRecipeParser } from "./hooks/useRecipeParser";
 import { Header } from "./components/Header";
 import { UrlForm } from "./components/UrlForm";
 import { ProgressCard } from "./components/ProgressCard";
+import { BackgroundIcons } from "./components/BackgroundIcons";
 
 export default function App() {
   const parser = useRecipeParser();
 
   return (
     <div className="neo-page-bg min-h-dvh px-4 py-6 pb-16 font-ui text-ink sm:px-5 sm:py-8">
+      <BackgroundIcons />
       <div className="mx-auto flex w-full max-w-5xl flex-col items-center gap-6">
         <Header />
 

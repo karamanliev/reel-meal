@@ -119,8 +119,6 @@ a {
   text-transform: uppercase;
 }
 
-
-
 .neo-logo-text {
   position: relative;
   display: inline-block;
@@ -285,4 +283,16 @@ details.neo-details > summary::-webkit-details-marker {
 
 details.neo-details[open] > summary {
   border-bottom: 3px solid #171717;
+}
+
+.bg-icon {
+  position: absolute;
+  opacity: 0.85;
+  will-change: transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bg-icon {
+    transition: none !important;
+  }
 }
