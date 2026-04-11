@@ -14,32 +14,27 @@ interface UrlFormProps {
   customPrompt: string;
   setCustomPrompt: (v: string) => void;
   customPromptMaxLength: number;
-  isLoading: boolean;
   onSubmit: (e: React.FormEvent) => void;
 }
 
 function ToggleButton({
   checked,
   onChange,
-  disabled,
   label,
 }: {
   checked: boolean;
   onChange: (v: boolean) => void;
-  disabled: boolean;
   label: string;
 }) {
   return (
     <label
       data-checked={checked}
-      data-disabled={disabled}
       className="neo-toggle"
     >
       <input
         type="checkbox"
         checked={checked}
         onChange={(e) => onChange(e.target.checked)}
-        disabled={disabled}
       />
 
       <span className="neo-toggle__track" aria-hidden="true">
@@ -70,7 +65,6 @@ export function UrlForm({
   customPrompt,
   setCustomPrompt,
   customPromptMaxLength,
-  isLoading,
   onSubmit,
 }: UrlFormProps) {
   return (
@@ -80,6 +74,7 @@ export function UrlForm({
           <p className="max-w-3xl neo-copy text-ink font-300">
             Paste a YouTube, Instagram, or TikTok link. ReelMeal extracts the
             recipe, normalizes the output, and gets it ready for Mealie.
+            Multiple URLs are processed one at a time.
           </p>
 
           <div className="mt-6 flex flex-col gap-3 max-w-4xl xl:flex-row">
@@ -89,7 +84,6 @@ export function UrlForm({
               placeholder="https://youtube.com/watch?v=..."
               value={url}
               onChange={(e) => setUrl(e.target.value)}
-              disabled={isLoading}
               required
               autoFocus
             />
@@ -97,13 +91,9 @@ export function UrlForm({
             <button
               className="neo-btn min-h-[52px] w-full whitespace-nowrap bg-sun text-[1.08rem] hover:bg-[#ffe08f] disabled:opacity-100 disabled:bg-[#e5e5e5] disabled:text-[#5b5b5b] disabled:shadow-neo-pressed xl:w-auto xl:min-w-48"
               type="submit"
-              disabled={isLoading || !url.trim()}
+              disabled={!url.trim()}
             >
-              {isLoading
-                ? "Processing..."
-                : autoImport
-                  ? "Import recipe"
-                  : "Generate recipe"}
+              {autoImport ? "Import recipe" : "Generate recipe"}
             </button>
           </div>
 
@@ -116,25 +106,21 @@ export function UrlForm({
             <ToggleButton
               checked={translate}
               onChange={setTranslate}
-              disabled={isLoading}
               label="Translate to English"
             />
             <ToggleButton
               checked={useCustomPrompt}
               onChange={setUseCustomPrompt}
-              disabled={isLoading}
               label="Use a custom prompt"
             />
             <ToggleButton
               checked={extractTranscript}
               onChange={setExtractTranscript}
-              disabled={isLoading}
               label="Extract transcript"
             />
             <ToggleButton
               checked={autoImport}
               onChange={setAutoImport}
-              disabled={isLoading}
               label="Auto-import to Mealie"
             />
           </div>
@@ -158,7 +144,6 @@ export function UrlForm({
                 value={customPrompt}
                 onChange={(e) => setCustomPrompt(e.target.value)}
                 placeholder='Add extra instructions, like "prefer metric units" or "keep steps concise".'
-                disabled={isLoading}
                 maxLength={customPromptMaxLength}
                 rows={4}
               />

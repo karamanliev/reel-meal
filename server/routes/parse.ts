@@ -15,30 +15,21 @@ import {
   type PreparedRecipeImport,
   type RecipeImportPayload,
 } from "../lib/mealie.js";
+import { jobQueue, type StepName, type StepState, type JobMetadataDetails } from "../lib/queue.js";
 
 // -------------------------------------------------------------------------
 // SSE event types (shared with frontend)
 // -------------------------------------------------------------------------
 
-export type StepName = "metadata" | "transcript" | "parsing" | "importing";
-export type StepStatus = "loading" | "done" | "error";
+export type SSEStepName = "metadata" | "transcript" | "parsing" | "importing";
+export type SSEStepStatus = "loading" | "done" | "error";
 
 export interface SSEEvent {
-  step: StepName;
-  status: StepStatus;
+  step: SSEStepName;
+  status: SSEStepStatus;
   message?: string;
   data?: Record<string, unknown>;
   error?: string;
-}
-
-// -------------------------------------------------------------------------
-// Job lock — one job at a time
-// -------------------------------------------------------------------------
-
-let jobRunning = false;
-
-export function isJobRunning(): boolean {
-  return jobRunning;
 }
 
 // -------------------------------------------------------------------------
@@ -49,14 +40,9 @@ type EmitFn = (event: SSEEvent) => Promise<void>;
 
 const CUSTOM_PROMPT_MAX_LENGTH = 400;
 
-/**
- * Measurement quantities + units pattern — matches things like "200 g",
- * "1/2 cup", "¼ tsp", "2 бр.", "100 мл", etc.
- */
 const QUANTITY_UNIT_RE =
   /(?:\d+(?:[.,]\d+)?|\d+\/\d+|[¼½¾⅓⅔⅛⅜⅝⅞])\s?(?:g|kg|mg|ml|l|tbsp|tsp|cup|cups|oz|lb|бр\.?|ч\.л\.?|с\.л\.?|гр\.?|кг|мл|л)\b/giu;
 
-/** Words/phrases that signal recipe content (EN + BG). */
 const RECIPE_SIGNAL_PATTERNS: RegExp[] = [
   /ingredients?/i,
   /instructions?/i,
@@ -86,7 +72,10 @@ function hasEnoughRecipeContext(description: string): { ok: boolean; reason?: st
 
   const quantityCount = (trimmed.match(QUANTITY_UNIT_RE) ?? []).length;
   const signalCount = RECIPE_SIGNAL_PATTERNS.filter((p) => p.test(trimmed)).length;
-  const lineCount = trimmed.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).length;
+  const lineCount = trimmed
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean).length;
 
   if (quantityCount >= 2 && (signalCount >= 1 || lineCount >= 4)) {
     return { ok: true };
@@ -95,10 +84,6 @@ function hasEnoughRecipeContext(description: string): { ok: boolean; reason?: st
   return { ok: false, reason: THIN_DESCRIPTION_REASON };
 }
 
-/**
- * Download audio, transcribe it via Whisper, and emit progress events.
- * Returns the transcript text and a cleanup function for the temp audio file.
- */
 async function transcribeViaAudio(
   videoUrl: string,
   emit: EmitFn,
@@ -153,13 +138,10 @@ async function runRecipeImport(params: {
 }
 
 // -------------------------------------------------------------------------
-// Pipeline steps — each returns updated state needed by later steps
+// Pipeline steps
 // -------------------------------------------------------------------------
 
-async function stepMetadata(
-  url: string,
-  emit: EmitFn,
-): Promise<VideoMetadata> {
+async function stepMetadata(url: string, emit: EmitFn): Promise<VideoMetadata> {
   await emit({ step: "metadata", status: "loading", message: "Fetching video info..." });
 
   const metadata = await fetchMetadata(url);
@@ -212,7 +194,6 @@ async function stepTranscript(
     return { transcript: "", source: null, audioCleanup: null, aborted: false };
   }
 
-  // Try manual subtitles first
   if (metadata.hasSubtitles) {
     await emit({ step: "transcript", status: "loading", message: "Extracting manual subtitles..." });
 
@@ -231,16 +212,19 @@ async function stepTranscript(
       return { transcript: subs.text, source: "subtitles", audioCleanup: null, aborted: false };
     }
 
-    // Subtitles were reported but extraction failed — fall through to audio
     console.log("[parse] Manual subtitle extraction returned nothing, downloading audio...");
   }
 
-  // Fall back to audio transcription
   const downloadMsg = metadata.hasSubtitles
     ? "Suitable subtitles unavailable, downloading audio..."
     : "Downloading audio for transcription...";
   const result = await transcribeViaAudio(url, emit, downloadMsg);
-  return { transcript: result.transcript, source: "audio", audioCleanup: result.cleanup, aborted: false };
+  return {
+    transcript: result.transcript,
+    source: "audio",
+    audioCleanup: result.cleanup,
+    aborted: false,
+  };
 }
 
 async function stepParsing(
@@ -262,7 +246,9 @@ async function stepParsing(
   });
   const preparedImport = await prepareRecipeImport(recipe, url);
 
-  console.log(`[parse] Recipe parsed: "${recipe.name}" with ${recipe.recipeIngredient.length} ingredients`);
+  console.log(
+    `[parse] Recipe parsed: "${recipe.name}" with ${recipe.recipeIngredient.length} ingredients`,
+  );
 
   await emit({
     step: "parsing",
@@ -282,7 +268,7 @@ async function stepImporting(
   preparedImport: PreparedRecipeImport,
   thumbnailUrl: string | undefined,
   emit: EmitFn,
-): Promise<void> {
+): Promise<{ recipeUrl: string; slug: string }> {
   await emit({ step: "importing", status: "loading", message: "Importing to Mealie..." });
 
   const result = await runRecipeImport({ preparedImport, thumbnailUrl });
@@ -294,10 +280,150 @@ async function stepImporting(
     message: "Recipe imported successfully!",
     data: { recipeUrl: result.recipeUrl, slug: result.slug },
   });
+
+  return result;
 }
 
 // -------------------------------------------------------------------------
-// Route
+// Pipeline runner
+// -------------------------------------------------------------------------
+
+async function processJob(jobId: string): Promise<void> {
+  const job = jobQueue.getJob(jobId);
+  if (!job) return;
+
+  const emit: EmitFn = async (event: SSEEvent) => {
+    const stepPatch: Partial<StepState> = {
+      status: event.status as StepState["status"],
+      message: event.message ?? event.error ?? "",
+    };
+    jobQueue.updateStep(jobId, event.step as StepName, stepPatch);
+
+    if (event.status === "done" && event.data) {
+      if (event.step === "metadata") {
+        const d = event.data;
+        jobQueue.updateJob(jobId, {
+          recipeTitle: (d.title as string) ?? null,
+          thumbnailUrl: (d.thumbnailUrl as string) ?? null,
+          metadataDetails: {
+            title: d.title as string,
+            uploader: d.uploader as string | undefined,
+            duration: d.duration as number | undefined,
+            description: d.description as string | undefined,
+            webpageUrl: d.webpageUrl as string | undefined,
+            thumbnailSourceUrl: d.thumbnailSourceUrl as string | undefined,
+            hasSubtitles: d.hasSubtitles as boolean | undefined,
+            subtitleLanguage: d.subtitleLanguage as string | undefined,
+          } satisfies JobMetadataDetails,
+        });
+      } else if (event.step === "transcript") {
+        const d = event.data;
+        if (
+          typeof d.transcript === "string" &&
+          (d.source === "subtitles" || d.source === "audio")
+        ) {
+          jobQueue.updateJob(jobId, {
+            transcriptDetails: {
+              transcript: d.transcript,
+              source: d.source,
+            },
+          });
+        }
+      } else if (event.step === "parsing") {
+        const d = event.data;
+        jobQueue.updateJob(jobId, {
+          parsingDetails: {
+            parsedRecipe: d.parsedRecipe,
+            importPayload: d.importPayload,
+            ingredientWarnings: Array.isArray(d.ingredientWarnings)
+              ? d.ingredientWarnings.filter((w): w is string => typeof w === "string")
+              : [],
+          },
+        });
+      } else if (event.step === "importing") {
+        const d = event.data;
+        if (d.recipeUrl) {
+          jobQueue.updateJob(jobId, { recipeUrl: d.recipeUrl as string });
+        }
+      }
+    }
+
+    if (event.status === "error") {
+      jobQueue.updateJob(jobId, { errorMessage: event.error ?? "An unexpected error occurred." });
+    }
+
+    jobQueue.emit("step", { jobId, ...event });
+  };
+
+  let audioCleanup: (() => Promise<void>) | null = null;
+
+  try {
+    const metadata = await stepMetadata(job.url, emit);
+
+    if (jobQueue.isCancelled(jobId)) return;
+
+    const transcriptResult = await stepTranscript(job.url, metadata, job.extractTranscript, emit);
+    audioCleanup = transcriptResult.audioCleanup;
+
+    if (transcriptResult.aborted) {
+      const errMsg = job.errorMessage ?? "Not enough context to parse a recipe.";
+      jobQueue.fail(jobId, errMsg);
+      return;
+    }
+
+    if (jobQueue.isCancelled(jobId)) return;
+
+    if (audioCleanup) {
+      await audioCleanup().catch(() => {});
+      audioCleanup = null;
+    }
+
+    const { preparedImport } = await stepParsing(
+      metadata,
+      transcriptResult.transcript,
+      job.translate,
+      job.customPrompt,
+      job.url,
+      emit,
+    );
+
+    if (jobQueue.isCancelled(jobId)) return;
+
+    if (!job.autoImport) {
+      jobQueue.updateStep(jobId, "importing", {
+        status: "idle",
+        message: "Ready to import when you are.",
+      });
+      jobQueue.emit("step", {
+        jobId,
+        step: "importing",
+        status: "idle",
+        message: "Ready to import when you are.",
+      });
+      jobQueue.review(jobId);
+      return;
+    }
+
+    const result = await stepImporting(preparedImport, metadata.thumbnailUrl, emit);
+    jobQueue.complete(jobId, result.recipeUrl);
+  } catch (err) {
+    if (jobQueue.isCancelled(jobId)) return;
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[parse] Pipeline error for job ${jobId}: ${message}`);
+    jobQueue.fail(jobId, message);
+  } finally {
+    if (audioCleanup) await audioCleanup().catch(() => {});
+  }
+}
+
+jobQueue.setProcessCallback((jobId) => {
+  processJob(jobId).catch((err) => {
+    console.error(`[parse] Unhandled error in job ${jobId}:`, err);
+  });
+});
+
+// -------------------------------------------------------------------------
+// Routes
 // -------------------------------------------------------------------------
 
 export const parseRouter = new Hono();
@@ -324,7 +450,7 @@ parseRouter.get("/api/thumbnail", async (c) => {
   if (!response.ok) {
     return c.json(
       { error: `Failed to fetch thumbnail: ${response.status} ${response.statusText}` },
-      502
+      502,
     );
   }
 
@@ -336,86 +462,7 @@ parseRouter.get("/api/thumbnail", async (c) => {
   return c.body(image);
 });
 
-parseRouter.get("/api/parse", async (c) => {
-  const url = c.req.query("url");
-  const translate = c.req.query("translate") === "true";
-  const extractTranscript = c.req.query("extractTranscript") !== "false";
-  const autoImport = c.req.query("autoImport") !== "false";
-  const customPrompt = c.req.query("customPrompt")?.trim() || "";
-
-  if (!url) {
-    return c.json({ error: "Missing required query parameter: url" }, 400);
-  }
-
-  if (customPrompt.length > CUSTOM_PROMPT_MAX_LENGTH) {
-    return c.json(
-      { error: `Custom prompt is too long. Keep it under ${CUSTOM_PROMPT_MAX_LENGTH} characters.` },
-      400
-    );
-  }
-
-  if (jobRunning) {
-    return c.json(
-      { error: "A recipe is already being processed. Please wait and try again." },
-      409
-    );
-  }
-
-  return streamSSE(c, async (stream) => {
-    jobRunning = true;
-    let currentStep: StepName = "metadata";
-    let audioCleanup: (() => Promise<void>) | null = null;
-
-    const emit: EmitFn = async (event) => {
-      await stream.writeSSE({
-        data: JSON.stringify(event),
-        event: "message",
-      });
-    };
-
-    try {
-      const metadata = await stepMetadata(url, emit);
-
-      currentStep = "transcript";
-      const transcriptResult = await stepTranscript(url, metadata, extractTranscript, emit);
-      audioCleanup = transcriptResult.audioCleanup;
-
-      if (transcriptResult.aborted) return;
-
-      // Clean up audio ASAP
-      if (audioCleanup) {
-        await audioCleanup().catch(() => {});
-        audioCleanup = null;
-      }
-
-      currentStep = "parsing";
-      const { preparedImport } = await stepParsing(
-        metadata, transcriptResult.transcript, translate, customPrompt, url, emit,
-      );
-
-      if (!autoImport) return;
-
-      currentStep = "importing";
-      await stepImporting(preparedImport, metadata.thumbnailUrl, emit);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error(`[parse] Pipeline error: ${message}`);
-      await emit({ step: currentStep, status: "error", error: message }).catch(() => {});
-    } finally {
-      if (audioCleanup) await audioCleanup().catch(() => {});
-      jobRunning = false;
-    }
-  });
-});
-
-parseRouter.post("/api/import", async (c) => {
-  if (jobRunning) {
-    return c.json(
-      { error: "A recipe is already being processed. Please wait and try again." },
-      409
-    );
-  }
-
+parseRouter.post("/api/parse", async (c) => {
   let body: unknown;
   try {
     body = await c.req.json();
@@ -427,22 +474,197 @@ parseRouter.post("/api/import", async (c) => {
     return c.json({ error: "Invalid request body" }, 400);
   }
 
-  const payload = (body as { importPayload?: unknown }).importPayload;
+  const url = typeof (body as Record<string, unknown>).url === "string" ? ((body as Record<string, unknown>).url as string).trim() : "";
+  const translate = (body as Record<string, unknown>).translate === true;
+  const extractTranscript = (body as Record<string, unknown>).extractTranscript !== false;
+  const autoImport = (body as Record<string, unknown>).autoImport !== false;
+  const customPrompt = typeof (body as Record<string, unknown>).customPrompt === "string" ? ((body as Record<string, unknown>).customPrompt as string).trim() : "";
+  const jobId = typeof (body as Record<string, unknown>).jobId === "string" ? ((body as Record<string, unknown>).jobId as string) : crypto.randomUUID();
+
+  if (!url) {
+    return c.json({ error: "Missing required field: url" }, 400);
+  }
+
+  if (customPrompt.length > CUSTOM_PROMPT_MAX_LENGTH) {
+    return c.json(
+      { error: `Custom prompt is too long. Keep it under ${CUSTOM_PROMPT_MAX_LENGTH} characters.` },
+      400,
+    );
+  }
+
+  const job = jobQueue.add({
+    id: jobId,
+    url,
+    translate,
+    extractTranscript,
+    autoImport,
+    customPrompt,
+  });
+
+  return c.json({ jobId: job.id });
+});
+
+parseRouter.get("/api/queue", async (c) => {
+  const snapshot = jobQueue.getSnapshot();
+  return c.json(snapshot);
+});
+
+parseRouter.get("/api/queue/stream", async (c) => {
+  return streamSSE(c, async (stream) => {
+    const handlers: Record<string, (...args: unknown[]) => void> = {};
+
+    handlers["job:added"] = (job: unknown) => {
+      stream.writeSSE({ event: "job-added", data: JSON.stringify(job) }).catch(() => {});
+    };
+
+    handlers["job:start"] = (jobId: unknown) => {
+      stream.writeSSE({ event: "job-start", data: JSON.stringify({ jobId }) }).catch(() => {});
+    };
+
+    handlers["job:position"] = (data: unknown) => {
+      stream.writeSSE({ event: "job-position", data: JSON.stringify(data) }).catch(() => {});
+    };
+
+    handlers["job:cancelled"] = (jobId: unknown) => {
+      stream.writeSSE({ event: "job-cancelled", data: JSON.stringify({ jobId }) }).catch(() => {});
+    };
+
+    handlers["job:removed"] = (jobId: unknown) => {
+      stream.writeSSE({ event: "job-removed", data: JSON.stringify({ jobId }) }).catch(() => {});
+    };
+
+    handlers["job:done"] = (data: unknown) => {
+      stream.writeSSE({ event: "job-done", data: JSON.stringify(data) }).catch(() => {});
+    };
+
+    handlers["job:review"] = (jobId: unknown) => {
+      stream.writeSSE({ event: "job-review", data: JSON.stringify({ jobId }) }).catch(() => {});
+    };
+
+    handlers["job:error"] = (data: unknown) => {
+      stream.writeSSE({ event: "job-error", data: JSON.stringify(data) }).catch(() => {});
+    };
+
+    handlers["step"] = (data: unknown) => {
+      stream.writeSSE({ event: "step", data: JSON.stringify(data) }).catch(() => {});
+    };
+
+    handlers["job:update"] = (jobId: unknown) => {
+      stream.writeSSE({ event: "job-update", data: JSON.stringify(jobId) }).catch(() => {});
+    };
+
+    for (const [event, handler] of Object.entries(handlers)) {
+      jobQueue.on(event, handler);
+    }
+
+    const keepalive = setInterval(() => {
+      stream.writeSSE({ data: "" }).catch(() => {});
+    }, 25000);
+
+    await new Promise<void>((resolve) => {
+      const abortHandler = () => {
+        clearInterval(keepalive);
+        for (const [event, handler] of Object.entries(handlers)) {
+          jobQueue.off(event, handler);
+        }
+        c.req.raw.signal.removeEventListener("abort", abortHandler);
+        resolve();
+      };
+      c.req.raw.signal.addEventListener("abort", abortHandler);
+    });
+  });
+});
+
+parseRouter.patch("/api/queue/:jobId", async (c) => {
+  const jobId = c.req.param("jobId");
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
+
+  if (typeof body !== "object" || body === null) {
+    return c.json({ error: "Invalid request body" }, 400);
+  }
+
+  const job = jobQueue.getJob(jobId);
+  if (!job) {
+    return c.json({ error: "Job not found." }, 404);
+  }
+
+  const newAutoImport = (body as Record<string, unknown>).autoImport;
+  if (typeof newAutoImport === "boolean") {
+    jobQueue.updateJob(jobId, { autoImport: newAutoImport });
+    jobQueue.emit("job:update", jobId);
+  }
+
+  return c.json({ success: true, jobId, autoImport: newAutoImport ?? job.autoImport });
+});
+
+parseRouter.delete("/api/queue/:jobId", async (c) => {
+  const jobId = c.req.param("jobId");
+  const job = jobQueue.getJob(jobId);
+
+  if (!job) {
+    return c.json({ error: "Job not found." }, 404);
+  }
+
+  if (job.status === "queued" || job.status === "active") {
+    const cancelled = jobQueue.cancel(jobId);
+    if (!cancelled) {
+      return c.json({ error: "Failed to cancel job." }, 500);
+    }
+    return c.json({ success: true, jobId });
+  }
+
+  const removed = jobQueue.remove(jobId);
+  if (!removed) {
+    return c.json({ error: "Failed to remove job." }, 500);
+  }
+  return c.json({ success: true, jobId });
+});
+
+parseRouter.post("/api/import", async (c) => {
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
+
+  if (typeof body !== "object" || body === null) {
+    return c.json({ error: "Invalid request body" }, 400);
+  }
+
+  const payload = (body as Record<string, unknown>).importPayload;
   if (typeof payload !== "object" || payload === null) {
     return c.json({ error: "Missing importPayload" }, 400);
   }
 
-  const ingredientWarnings = Array.isArray((body as { ingredientWarnings?: unknown }).ingredientWarnings)
-    ? (body as { ingredientWarnings: unknown[] }).ingredientWarnings.filter(
-        (warning): warning is string => typeof warning === "string"
+  const ingredientWarnings = Array.isArray((body as Record<string, unknown>).ingredientWarnings)
+    ? ((body as Record<string, unknown>).ingredientWarnings as unknown[]).filter(
+        (warning): warning is string => typeof warning === "string",
       )
     : [];
   const thumbnailUrl =
-    typeof (body as { thumbnailUrl?: unknown }).thumbnailUrl === "string"
-      ? (body as { thumbnailUrl: string }).thumbnailUrl
+    typeof (body as Record<string, unknown>).thumbnailUrl === "string"
+      ? ((body as Record<string, unknown>).thumbnailUrl as string)
       : undefined;
 
-  jobRunning = true;
+  const jobId = typeof (body as Record<string, unknown>).jobId === "string"
+    ? ((body as Record<string, unknown>).jobId as string)
+    : undefined;
+
+  if (jobId) {
+    jobQueue.updateStep(jobId, "importing", { status: "loading", message: "Importing to Mealie..." });
+    jobQueue.emit("step", {
+      jobId,
+      step: "importing",
+      status: "loading",
+      message: "Importing to Mealie...",
+    });
+  }
 
   try {
     const result = await runRecipeImport({
@@ -453,6 +675,22 @@ parseRouter.post("/api/import", async (c) => {
       thumbnailUrl,
     });
 
+    if (jobId) {
+      jobQueue.updateStep(jobId, "importing", {
+        status: "done",
+        message: "Recipe imported successfully!",
+      });
+      jobQueue.updateJob(jobId, { recipeUrl: result.recipeUrl });
+      jobQueue.emit("step", {
+        jobId,
+        step: "importing",
+        status: "done",
+        message: "Recipe imported successfully!",
+        data: { recipeUrl: result.recipeUrl, slug: result.slug },
+      });
+      jobQueue.emit("job:done", { jobId, recipeUrl: result.recipeUrl });
+    }
+
     return c.json({
       recipeUrl: result.recipeUrl,
       slug: result.slug,
@@ -460,8 +698,18 @@ parseRouter.post("/api/import", async (c) => {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[parse] Manual import error: ${message}`);
+
+    if (jobId) {
+      jobQueue.updateStep(jobId, "importing", { status: "error", message });
+      jobQueue.updateJob(jobId, { errorMessage: message });
+      jobQueue.emit("step", {
+        jobId,
+        step: "importing",
+        status: "error",
+        error: message,
+      });
+    }
+
     return c.json({ error: message }, 500);
-  } finally {
-    jobRunning = false;
   }
 });
