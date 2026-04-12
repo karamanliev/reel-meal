@@ -29,7 +29,8 @@ app.use(
 
 app.route("/", parseRouter);
 
-// Health check
+app.get("/api/config", (c) => c.json({ mealieUrl: config.mealieUrl }));
+
 app.get("/api/health", (c) => c.json({ status: "ok", timestamp: new Date().toISOString() }));
 
 // -------------------------------------------------------------------------

@@ -4,6 +4,7 @@ import { Header } from "./components/Header";
 import { UrlForm } from "./components/UrlForm";
 import { ProgressCard } from "./components/ProgressCard";
 import { QueueDrawer } from "./components/QueueDrawer";
+import { Footer } from "./components/Footer";
 import { BackgroundIcons } from "./components/BackgroundIcons";
 import { getIngredients, getInstructions } from "./lib/formatters";
 import {
@@ -67,9 +68,9 @@ export default function App() {
       };
 
   return (
-    <div className="neo-page-bg min-h-dvh px-4 py-6 font-ui text-ink sm:px-5 sm:py-8">
+    <div className="neo-page-bg flex min-h-dvh flex-col px-4 py-6 font-ui text-ink sm:px-5 sm:py-8">
       <BackgroundIcons />
-      <div className="mx-auto flex w-full max-w-5xl flex-col items-center gap-6">
+      <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col items-center gap-6">
         <Header />
 
         <UrlForm
@@ -122,6 +123,8 @@ export default function App() {
         )}
       </div>
 
+      <Footer />
+
       <QueueDrawer
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
@@ -131,6 +134,7 @@ export default function App() {
         cancelJob={q.cancelJob}
         removeJob={q.removeJob}
         toggleAutoImport={q.toggleAutoImport}
+        addJob={q.addJob}
       />
     </div>
   );
