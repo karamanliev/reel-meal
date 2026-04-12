@@ -1,10 +1,12 @@
-import { useState } from "react";
+import { useEffect, useRef } from "react";
 import type { JobState } from "../lib/types";
 
-interface QueueSidebarProps {
+interface QueueDrawerProps {
+  open: boolean;
+  onClose: () => void;
   jobs: JobState[];
   selectedJobId: string | null;
-  selectJob: (jobId: string | null) => void;
+  selectJob: (jobId: string) => void;
   cancelJob: (jobId: string) => void;
   removeJob: (jobId: string) => void;
   toggleAutoImport: (jobId: string, value: boolean) => void;
@@ -62,6 +64,7 @@ function trimUrl(url: string): string {
 function QueueItem({
   job,
   isSelected,
+  isHighlighted,
   onSelect,
   onCancel,
   onRemove,
@@ -69,6 +72,7 @@ function QueueItem({
 }: {
   job: JobState;
   isSelected: boolean;
+  isHighlighted: boolean;
   onSelect: () => void;
   onCancel: () => void;
   onRemove: () => void;
@@ -87,17 +91,19 @@ function QueueItem({
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onSelect(); }}
       className={`group w-full cursor-pointer rounded-[12px] border-3 border-solid p-3 text-left transition-colors ${
         isSelected
-          ? "border-black bg-white shadow-neo"
-          : "border-transparent bg-paper hover:border-black/30"
+          ? "border-black bg-white shadow-neo-xs"
+          : isHighlighted
+            ? "border-black/20 bg-white/90"
+            : "border-transparent bg-paper/60 opacity-70 hover:border-black/20 hover:opacity-100"
       }`}
     >
-      <div className="flex items-start gap-2">
-        <div className="h-14 w-14 shrink-0 overflow-hidden rounded-[8px] bg-[#e5e5e5]">
+      <div className="flex items-start gap-3">
+        <div className="h-20 w-20 shrink-0 overflow-hidden rounded-[8px] bg-[#e5e5e5]">
           {job.thumbnailUrl ? (
             <img src={job.thumbnailUrl} alt="" className="h-full w-full object-cover" />
           ) : (
             <div className="flex h-full w-full items-center justify-center">
-              <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5 text-[#999]">
+              <svg viewBox="0 0 24 24" fill="none" className="h-6 w-6 text-[#999]">
                 <path d="M4 4h16v16H4V4z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
                 <circle cx="8.5" cy="8.5" r="1.5" fill="currentColor" />
                 <path d="M4 20l4-4 3 3 5-6 4 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
@@ -106,7 +112,7 @@ function QueueItem({
           )}
         </div>
         <div className="min-w-0 flex-1">
-          <p className="m-0 text-[0.85rem] leading-snug font-700 text-ink">
+          <p className="m-0 text-[0.88rem] leading-snug font-700 text-ink">
             {title}
           </p>
           {job.phase === "queued" && job.position > 0 && (
@@ -129,6 +135,33 @@ function QueueItem({
               Job cancelled.
             </p>
           )}
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+            <JobStatusBadge phase={job.phase} />
+            {canCancel && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onCancel();
+                }}
+                className="rounded-[6px] border-2 border-solid border-[#8d1e1e]/40 px-1.5 py-0.5 text-[0.65rem] font-700 uppercase tracking-wider text-[#8d1e1e]/70 transition-colors hover:border-[#8d1e1e] hover:text-[#8d1e1e]"
+              >
+                Cancel
+              </button>
+            )}
+            {isDone && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRemove();
+                }}
+                className="rounded-[6px] border-2 border-solid border-[#8d1e1e]/40 px-1.5 py-0.5 text-[0.65rem] font-700 uppercase tracking-wider text-[#8d1e1e]/70 transition-colors hover:border-[#8d1e1e] hover:text-[#8d1e1e]"
+              >
+                Clear
+              </button>
+            )}
+          </div>
           {showAutoImportToggle && (
             <label
               className="mt-1.5 flex items-center gap-1.5"
@@ -149,82 +182,103 @@ function QueueItem({
             </label>
           )}
         </div>
-        <div className="flex shrink-0 flex-col items-end gap-1">
-          <JobStatusBadge phase={job.phase} />
-          {canCancel && (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onCancel();
-              }}
-              className="rounded-[6px] border-2 border-solid border-[#8d1e1e]/40 px-1.5 py-0.5 text-[0.65rem] font-700 uppercase tracking-wider text-[#8d1e1e]/70 transition-colors hover:border-[#8d1e1e] hover:text-[#8d1e1e]"
-            >
-              Cancel
-            </button>
-          )}
-          {isDone && (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onRemove();
-              }}
-              className="rounded-[6px] border-2 border-solid border-[#8d1e1e]/40 px-1.5 py-0.5 text-[0.65rem] font-700 uppercase tracking-wider text-[#8d1e1e]/70 transition-colors hover:border-[#8d1e1e] hover:text-[#8d1e1e]"
-            >
-              Clear
-            </button>
-          )}
-        </div>
       </div>
     </div>
   );
 }
 
-export function QueueSidebar({
+export function QueueDrawer({
+  open,
+  onClose,
   jobs,
   selectedJobId,
   selectJob,
   cancelJob,
   removeJob,
   toggleAutoImport,
-}: QueueSidebarProps) {
-  const [isMobileExpanded, setIsMobileExpanded] = useState(false);
+}: QueueDrawerProps) {
+  const drawerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", handleKey);
+    return () => document.removeEventListener("keydown", handleKey);
+  }, [open, onClose]);
 
   if (jobs.length === 0) return null;
 
-  const activeJobs = jobs.filter((j) => j.phase === "loading" || j.phase === "review");
+  const activeJobs = jobs.filter((j) => j.phase === "loading");
   const queuedJobs = jobs.filter((j) => j.phase === "queued");
-  const completedJobs = jobs.filter((j) => j.phase === "done" || j.phase === "error");
-  const totalCount = jobs.length;
+  const reviewJobs = jobs.filter((j) => j.phase === "review");
+  const completedJobs = jobs.filter((j) => j.phase === "done" || j.phase === "error" || j.phase === "cancelled");
 
-  const summaryText = [
+  const summaryParts = [
     activeJobs.length > 0 ? `${activeJobs.length} processing` : null,
+    reviewJobs.length > 0 ? `${reviewJobs.length} review` : null,
     queuedJobs.length > 0 ? `${queuedJobs.length} queued` : null,
     completedJobs.length > 0 ? `${completedJobs.length} done` : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  ].filter(Boolean);
+  const summaryText = summaryParts.join(" · ");
+
+  const sortedJobs = [
+    ...activeJobs,
+    ...reviewJobs,
+    ...queuedJobs,
+    ...completedJobs,
+  ];
 
   return (
     <>
-      {/* Desktop sidebar */}
-      <aside className="hidden md:flex w-64 shrink-0 flex-col gap-2 lg:w-72">
-        <div className="rounded-[16px] border-4 border-solid border-black bg-paper shadow-neo">
-          <div className="border-b-3 border-solid border-black px-3 py-2.5">
-            <div className="flex items-center justify-between">
-              <h2 className="m-0 text-[0.82rem] font-800 uppercase tracking-wider">
-                Queue
-              </h2>
-              <span className="text-[0.7rem] font-700 text-[#5b5b5b]">{totalCount} items</span>
-            </div>
+      {/* Backdrop */}
+      <div
+        className={`fixed inset-0 z-50 bg-black/40 transition-opacity duration-200 ${
+          open ? "opacity-100" : "pointer-events-none opacity-0"
+        }`}
+        onClick={onClose}
+      />
+
+      {/* Drawer */}
+      <div
+        ref={drawerRef}
+        className={`fixed right-0 top-0 z-50 flex h-full w-full flex-col border-l-4 border-solid border-black bg-paper shadow-neo transition-transform duration-200 ease-out md:w-[520px] ${
+          open ? "translate-x-0" : "translate-x-full"
+        }`}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between border-b-4 border-solid border-black px-4 py-3">
+          <div className="min-w-0">
+            <h2 className="m-0 text-[0.92rem] font-800 uppercase tracking-wider text-ink">
+              Queue
+            </h2>
+            <p className="m-0 mt-0.5 text-[0.72rem] font-600 text-[#5b5b5b]">
+              {jobs.length} {jobs.length === 1 ? "item" : "items"}{summaryText ? ` · ${summaryText}` : ""}
+            </p>
           </div>
-          <div className="flex max-h-[70vh] flex-col gap-1.5 overflow-y-auto p-2.5">
-            {jobs.map((job) => (
+          <button
+            type="button"
+            onClick={onClose}
+            className="neo-btn-secondary ml-2 shrink-0 px-3 py-1.5 text-[0.78rem]"
+            aria-label="Close queue drawer"
+          >
+            <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
+              <line x1="6" y1="6" x2="18" y2="18" />
+              <line x1="18" y1="6" x2="6" y2="18" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Item list */}
+        <div className="flex-1 overflow-y-auto p-3">
+          <div className="flex flex-col gap-2">
+            {sortedJobs.map((job) => (
               <QueueItem
                 key={job.id}
                 job={job}
                 isSelected={selectedJobId === job.id}
+                isHighlighted={job.phase === "loading"}
                 onSelect={() => selectJob(job.id)}
                 onCancel={() => cancelJob(job.id)}
                 onRemove={() => removeJob(job.id)}
@@ -233,72 +287,6 @@ export function QueueSidebar({
             ))}
           </div>
         </div>
-      </aside>
-
-      {/* Mobile bottom sheet */}
-      <div className="md:hidden">
-        {/* Collapsed handle bar */}
-        {!isMobileExpanded && (
-          <div
-            className="fixed inset-x-0 bottom-0 z-40 border-t-3 border-solid border-black bg-paper shadow-[0_-4px_0_#171717]"
-          >
-            <button
-              type="button"
-              onClick={() => setIsMobileExpanded(true)}
-              className="flex w-full items-center justify-between px-4 py-3"
-            >
-              <span className="text-[0.82rem] font-800 uppercase tracking-wider">
-                Queue
-              </span>
-              <span className="text-[0.75rem] font-700 text-[#5b5b5b]">{summaryText}</span>
-            </button>
-          </div>
-        )}
-
-        {/* Expanded overlay */}
-        {isMobileExpanded && (
-          <>
-            <div
-              className="fixed inset-0 z-40 bg-black/40"
-              onClick={() => setIsMobileExpanded(false)}
-            />
-            <div className="fixed inset-x-0 bottom-0 z-50 max-h-[60vh] rounded-t-[16px] border-4 border-solid border-black border-b-0 bg-paper shadow-neo">
-              <div className="flex items-center justify-between border-b-3 border-solid border-black px-4 py-3">
-                <div className="flex items-center gap-2">
-                  <h2 className="m-0 text-[0.82rem] font-800 uppercase tracking-wider">
-                    Queue
-                  </h2>
-                  <span className="text-[0.7rem] font-700 text-[#5b5b5b]">
-                    {totalCount} items · {summaryText}
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setIsMobileExpanded(false)}
-                  className="neo-btn-secondary px-2 py-1 text-[0.75rem]"
-                >
-                  Close
-                </button>
-              </div>
-              <div className="flex max-h-[50vh] flex-col gap-1.5 overflow-y-auto p-3">
-                {jobs.map((job) => (
-                  <QueueItem
-                    key={job.id}
-                    job={job}
-                    isSelected={selectedJobId === job.id}
-                    onSelect={() => {
-                      selectJob(job.id);
-                      setIsMobileExpanded(false);
-                    }}
-                    onCancel={() => cancelJob(job.id)}
-                    onRemove={() => removeJob(job.id)}
-                    onToggleAutoImport={(v) => toggleAutoImport(job.id, v)}
-                  />
-                ))}
-              </div>
-            </div>
-          </>
-        )}
       </div>
     </>
   );

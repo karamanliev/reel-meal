@@ -149,4 +149,4 @@ npm start
 
 ## Todo
 
-- [ ] Video queuing
+- [x] Video queuing

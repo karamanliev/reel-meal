@@ -21,7 +21,7 @@ export function Header() {
             </h1>
           </div>
 
-          <p className="m-0 text-[1.2rem] leading-[1.2] font-400 italic text-ink sm:text-[1.35rem]">
+          <p className="hidden md:block m-0 text-[1.2rem] leading-[1.2] font-400 italic text-ink sm:text-[1.35rem]">
             From reels to meals
           </p>
         </div>

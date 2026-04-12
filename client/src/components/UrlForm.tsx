@@ -1,4 +1,5 @@
 import eggsAndBaconMascot from "../assets/images/egss_n_bacon.png";
+import { QueueTrigger } from "./QueueTrigger";
 
 interface UrlFormProps {
   url: string;
@@ -15,6 +16,8 @@ interface UrlFormProps {
   setCustomPrompt: (v: string) => void;
   customPromptMaxLength: number;
   onSubmit: (e: React.FormEvent) => void;
+  queueCount: number;
+  onQueueClick: () => void;
 }
 
 function ToggleButton({
@@ -27,10 +30,7 @@ function ToggleButton({
   label: string;
 }) {
   return (
-    <label
-      data-checked={checked}
-      className="neo-toggle"
-    >
+    <label data-checked={checked} className="neo-toggle">
       <input
         type="checkbox"
         checked={checked}
@@ -66,6 +66,8 @@ export function UrlForm({
   setCustomPrompt,
   customPromptMaxLength,
   onSubmit,
+  queueCount,
+  onQueueClick,
 }: UrlFormProps) {
   return (
     <form className="w-full animate-bounce-in" onSubmit={onSubmit}>
@@ -77,7 +79,7 @@ export function UrlForm({
             Multiple URLs are processed one at a time.
           </p>
 
-          <div className="mt-6 flex flex-col gap-3 max-w-4xl xl:flex-row">
+          <div className="mt-6 flex max-w-4xl flex-col gap-3 lg:flex-row lg:items-center">
             <input
               className="neo-input min-h-[58px] flex-1"
               type="url"
@@ -88,13 +90,16 @@ export function UrlForm({
               autoFocus
             />
 
-            <button
-              className="neo-btn min-h-[52px] w-full whitespace-nowrap bg-sun text-[1.08rem] hover:bg-[#ffe08f] disabled:opacity-100 disabled:bg-[#e5e5e5] disabled:text-[#5b5b5b] disabled:shadow-neo-pressed xl:w-auto xl:min-w-48"
-              type="submit"
-              disabled={!url.trim()}
-            >
-              {autoImport ? "Import recipe" : "Generate recipe"}
-            </button>
+<div className="flex gap-3">
+              <button
+                className="neo-btn min-h-[52px] w-full whitespace-nowrap bg-sun text-[1.08rem] hover:bg-[#ffe08f] disabled:opacity-100 disabled:bg-[#e5e5e5] disabled:text-[#5b5b5b] disabled:shadow-neo-pressed lg:w-auto lg:min-w-48"
+                type="submit"
+                disabled={!url.trim()}
+              >
+                {autoImport ? "Import recipe" : "Generate recipe"}
+              </button>
+              <QueueTrigger count={queueCount} onClick={onQueueClick} />
+            </div>
           </div>
 
           <p className="mt-8 max-w-2xl text-[0.98rem] leading-6 font-300 text-ink">
@@ -160,7 +165,7 @@ export function UrlForm({
           <img
             src={eggsAndBaconMascot}
             alt=""
-            className="pointer-events-none absolute right-[-45px] top-[215px] xl:top-[145px] hidden h-[305px] lg:block xl:h-[375px]"
+            className="pointer-events-none absolute right-[-45px] top-[215px] lg:top-[145px] hidden h-[305px] lg:block lg:h-[375px]"
           />
         </div>
       </div>

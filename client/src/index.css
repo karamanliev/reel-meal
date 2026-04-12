@@ -92,6 +92,22 @@ a {
   animation: spin 1.2s linear infinite;
 }
 
+@keyframes pop {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.15);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.animate-pop {
+  animation: pop 0.3s ease-out;
+}
+
 .step-card:nth-child(1) {
   animation-delay: 0ms;
 }

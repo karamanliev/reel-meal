@@ -65,6 +65,8 @@ export function useQueue() {
   const jobsRef = useRef<Map<string, JobState>>(jobs);
   jobsRef.current = jobs;
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
+  const selectedJobIdRef = useRef<string | null>(selectedJobId);
+  selectedJobIdRef.current = selectedJobId;
   const eventSourceRef = useRef<EventSource | null>(null);
   const eventBufferRef = useRef<{ event: string; data: string }[]>([]);
   const snapshotProcessedRef = useRef(false);
@@ -432,7 +434,16 @@ export function useQueue() {
         next.set(jobId, optimisticJob);
         return next;
       });
-      setSelectedJobId(jobId);
+
+      const currentJob = selectedJobIdRef.current
+        ? jobsRef.current.get(selectedJobIdRef.current)
+        : undefined;
+      const isFinished = currentJob
+        ? currentJob.phase === "done" || currentJob.phase === "error" || currentJob.phase === "cancelled"
+        : true;
+      if (isFinished) {
+        setSelectedJobId(jobId);
+      }
 
       fetch("/api/parse", {
         method: "POST",

@@ -69,9 +69,25 @@ export function ProgressCard(props: ProgressCardProps) {
       <div className="neo-card animate-bounce-in bg-sun p-5 sm:p-6">
         <div className="flex items-center gap-4">
           <div className="neo-card-soft flex h-14 w-14 shrink-0 items-center justify-center bg-white">
-            <svg viewBox="0 0 24 24" fill="none" className="h-7 w-7 animate-spin-slow">
-              <circle cx="12" cy="12" r="9" stroke="#171717" strokeOpacity="0.18" strokeWidth="3" />
-              <path d="M12 3A9 9 0 0 1 21 12" stroke="#171717" strokeWidth="3" strokeLinecap="round" />
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              className="h-7 w-7 animate-spin-slow"
+            >
+              <circle
+                cx="12"
+                cy="12"
+                r="9"
+                stroke="#171717"
+                strokeOpacity="0.18"
+                strokeWidth="3"
+              />
+              <path
+                d="M12 3A9 9 0 0 1 21 12"
+                stroke="#171717"
+                strokeWidth="3"
+                strokeLinecap="round"
+              />
             </svg>
           </div>
           <div>
@@ -80,7 +96,8 @@ export function ProgressCard(props: ProgressCardProps) {
             </h3>
             {props.queuePosition != null && props.queuePosition > 0 && (
               <p className="mt-1.5 text-[0.9rem] font-600 text-ink">
-                Position {props.queuePosition} of {props.queueTotal} · Another recipe is being processed
+                Position {props.queuePosition} of {props.queueTotal} · Another
+                recipe is being processed
               </p>
             )}
           </div>
@@ -90,7 +107,7 @@ export function ProgressCard(props: ProgressCardProps) {
   }
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="w-full flex flex-col gap-5">
       {(props.recipeTitle || props.thumbnailUrl) && (
         <div className="neo-card overflow-hidden animate-bounce-in bg-white">
           {props.thumbnailUrl && (
