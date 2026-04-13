@@ -85,7 +85,7 @@ export default function App() {
     <div className="neo-page-bg flex min-h-dvh flex-col px-4 py-6 font-ui text-ink sm:px-5 sm:py-8">
       <BackgroundIcons />
       <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col items-center gap-6">
-        <Header />
+        <Header queueCount={q.jobs.length} onQueueClick={() => setDrawerOpen(true)} />
 
         <UrlForm
           url={q.url}
@@ -102,8 +102,6 @@ export default function App() {
           setCustomPrompt={q.setCustomPrompt}
           customPromptMaxLength={q.customPromptMaxLength}
           onSubmit={q.handleSubmit}
-          queueCount={q.jobs.length}
-          onQueueClick={() => setDrawerOpen(true)}
         />
 
         {showProgressCard && selectedJob && (
