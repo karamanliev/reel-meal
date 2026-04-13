@@ -219,8 +219,6 @@ export function QueueDrawer({
     return () => document.removeEventListener("keydown", handleKey);
   }, [open, onClose]);
 
-  if (!open) return null;
-
   const activeJobs = jobs.filter((j) => j.phase === "loading");
   const queuedJobs = jobs.filter((j) => j.phase === "queued");
   const reviewJobs = jobs.filter((j) => j.phase === "review");
