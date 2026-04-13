@@ -73,10 +73,38 @@ export function ProgressCard(props: ProgressCardProps) {
   const [repromptValue, setRepromptValue] = React.useState(props.customPrompt);
   const repromptValueRef = React.useRef(props.customPrompt);
   repromptValueRef.current = repromptValue;
+  const prevLoadingStepRef = React.useRef<StepName | null>(null);
 
   React.useEffect(() => {
     setRepromptValue(props.customPrompt);
   }, [props.customPrompt]);
+
+  React.useEffect(() => {
+    const loadingStep = (Object.keys(props.steps) as StepName[]).find(
+      (s) => props.steps[s].status === "loading",
+    ) ?? null;
+    if (loadingStep) {
+      requestAnimationFrame(() => {
+        const el = document.getElementById(`step-${loadingStep}`);
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      });
+      prevLoadingStepRef.current = loadingStep;
+      return;
+    }
+    const phaseTargets: Record<string, string> = {
+      review: "section-reprompt",
+      done: "section-success",
+      error: "section-error",
+      cancelled: "section-cancelled",
+    };
+    const target = phaseTargets[props.phase];
+    if (target) {
+      requestAnimationFrame(() => {
+        const el = document.getElementById(target);
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      });
+    }
+  }, [props.steps, props.phase, props.showRepromptPanel, props.showManualImportPanel, props.recipeUrl]);
 
   if (props.phase === "queued") {
     return (
@@ -161,6 +189,7 @@ export function ProgressCard(props: ProgressCardProps) {
         return (
           <div
             key={step.id}
+            id={`step-${step.id}`}
             className={`step-card animate-bounce-in rounded-[18px] border-4 border-solid border-black p-4 shadow-neo sm:p-5 ${accent.surface}`}
           >
             <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-3 sm:gap-x-4 sm:gap-y-2">
@@ -218,7 +247,7 @@ export function ProgressCard(props: ProgressCardProps) {
       })}
 
       {props.showRepromptPanel && (
-        <div className="neo-card animate-bounce-in bg-white p-4 sm:p-5">
+        <div id="section-reprompt" className="neo-card animate-bounce-in bg-white p-4 sm:p-5">
           <span className="neo-tag bg-sun">Adjust recipe</span>
           <p className="mt-3 text-[1rem] leading-6 font-600 text-ink">
             Not happy with the result? Tweak the prompt and re-generate the recipe.
@@ -261,6 +290,7 @@ export function ProgressCard(props: ProgressCardProps) {
 
         return (
           <div
+            id="step-importing"
             className={`step-card animate-bounce-in rounded-[18px] border-4 border-solid border-black p-4 shadow-neo sm:p-5 ${accent.surface}`}
           >
             <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-3 sm:gap-x-4 sm:gap-y-2">
@@ -285,7 +315,7 @@ export function ProgressCard(props: ProgressCardProps) {
       })()}
 
       {props.showManualImportPanel && (
-        <div className="neo-card animate-bounce-in bg-blue p-4 sm:p-5">
+        <div id="section-manual-import" className="neo-card animate-bounce-in bg-blue p-4 sm:p-5">
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div className="min-w-0 flex-1">
               <span className="neo-tag bg-white">Manual import</span>
@@ -313,7 +343,7 @@ export function ProgressCard(props: ProgressCardProps) {
       )}
 
       {props.phase === "done" && props.recipeUrl && (
-        <div className="neo-card animate-bounce-in bg-lime p-6 sm:p-7">
+        <div id="section-success" className="neo-card animate-bounce-in bg-lime p-6 sm:p-7">
           <div className="grid grid-cols-1 gap-4 sm:gap-5 md:grid-cols-[auto_minmax(0,1fr)_auto] md:items-center">
             <div className="w-full md:w-auto">
               <img
@@ -343,7 +373,7 @@ export function ProgressCard(props: ProgressCardProps) {
       )}
 
       {props.phase === "cancelled" && (
-        <div className="neo-card animate-bounce-in bg-paper p-4 sm:p-5">
+        <div id="section-cancelled" className="neo-card animate-bounce-in bg-paper p-4 sm:p-5">
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div className="min-w-0 flex-1">
               <span className="neo-tag bg-sun">Cancelled</span>
@@ -359,7 +389,7 @@ export function ProgressCard(props: ProgressCardProps) {
       )}
 
       {props.phase === "error" && (
-        <div className="neo-card animate-bounce-in bg-peach p-4 sm:p-5">
+        <div id="section-error" className="neo-card animate-bounce-in bg-peach p-4 sm:p-5">
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div className="min-w-0 flex-1">
               <span className="neo-tag bg-white">Something broke</span>
