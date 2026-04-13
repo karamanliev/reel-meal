@@ -1,3 +1,4 @@
+import React from "react";
 import type {
   StepName,
   StepState,
@@ -37,6 +38,11 @@ interface ProgressCardProps {
   showDiffView: boolean;
   showImportPreview: boolean;
   showManualImportPanel: boolean;
+  showRepromptPanel: boolean;
+  customPrompt: string;
+  customPromptMaxLength: number;
+  repromptLoading: boolean;
+  onReprompt: (customPrompt: string) => void;
   toggleDetails: (step: StepName) => void;
   handleManualImport: () => void;
   reset: () => void;
@@ -64,6 +70,14 @@ const STEP_ACCENT: Record<string, { surface: string; chip: string }> = {
 };
 
 export function ProgressCard(props: ProgressCardProps) {
+  const [repromptValue, setRepromptValue] = React.useState(props.customPrompt);
+  const repromptValueRef = React.useRef(props.customPrompt);
+  repromptValueRef.current = repromptValue;
+
+  React.useEffect(() => {
+    setRepromptValue(props.customPrompt);
+  }, [props.customPrompt]);
+
   if (props.phase === "queued") {
     return (
       <div className="neo-card animate-bounce-in bg-sun p-5 sm:p-6">
@@ -135,7 +149,7 @@ export function ProgressCard(props: ProgressCardProps) {
         </div>
       )}
 
-      {STEPS.map((step) => {
+      {STEPS.filter((s) => s.id !== "importing").map((step) => {
         const state = props.steps[step.id];
         const accent = STEP_ACCENT[state.status];
         const hasDetails =
@@ -202,6 +216,73 @@ export function ProgressCard(props: ProgressCardProps) {
           </div>
         );
       })}
+
+      {props.showRepromptPanel && (
+        <div className="neo-card animate-bounce-in bg-white p-4 sm:p-5">
+          <span className="neo-tag bg-sun">Adjust recipe</span>
+          <p className="mt-3 text-[1rem] leading-6 font-600 text-ink">
+            Not happy with the result? Tweak the prompt and re-generate the recipe.
+          </p>
+          <div className="mt-4">
+            <div className="flex items-center justify-between gap-3">
+              <p className="neo-overline">Custom parser instructions</p>
+              <span className="text-[0.78rem] font-ui font-700">
+                {repromptValue.length}/{props.customPromptMaxLength}
+              </span>
+            </div>
+            <textarea
+              className="neo-textarea mt-2 min-h-28"
+              value={repromptValue}
+              onChange={(e) => setRepromptValue(e.target.value)}
+              placeholder='e.g. "prefer metric units", "keep steps concise", "focus on the sauce only"'
+              maxLength={props.customPromptMaxLength}
+              rows={3}
+              disabled={props.repromptLoading}
+            />
+          </div>
+          <div className="mt-4 flex flex-wrap gap-3">
+            <button
+              type="button"
+              className="neo-btn min-h-[48px] whitespace-nowrap bg-blue text-[1rem] hover:bg-[#6ea8fe] disabled:opacity-100 disabled:bg-[#e5e5e5] disabled:text-[#5b5b5b] disabled:shadow-neo-pressed"
+              onClick={() => props.onReprompt(repromptValue)}
+              disabled={props.repromptLoading}
+            >
+              {props.repromptLoading ? "Re-generating..." : "Re-generate recipe"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {(() => {
+        const step = STEPS.find((s) => s.id === "importing");
+        if (!step) return null;
+        const state = props.steps.importing;
+        const accent = STEP_ACCENT[state.status];
+
+        return (
+          <div
+            className={`step-card animate-bounce-in rounded-[18px] border-4 border-solid border-black p-4 shadow-neo sm:p-5 ${accent.surface}`}
+          >
+            <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-3 sm:gap-x-4 sm:gap-y-2">
+              <div className="neo-card-soft flex h-12 w-12 shrink-0 items-center justify-center bg-white">
+                <StatusIcon status={state.status} />
+              </div>
+
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={`neo-tag ${accent.chip}`}>{step.label}</span>
+                </div>
+
+                {state.message && (
+                  <p className="mt-3 text-[1.02rem] leading-6 font-600 text-ink break-anywhere">
+                    {state.message}
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {props.showManualImportPanel && (
         <div className="neo-card animate-bounce-in bg-blue p-4 sm:p-5">

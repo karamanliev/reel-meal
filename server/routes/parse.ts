@@ -288,11 +288,8 @@ async function stepImporting(
 // Pipeline runner
 // -------------------------------------------------------------------------
 
-async function processJob(jobId: string): Promise<void> {
-  const job = jobQueue.getJob(jobId);
-  if (!job) return;
-
-  const emit: EmitFn = async (event: SSEEvent) => {
+function createEmitter(jobId: string): EmitFn {
+  return async (event: SSEEvent) => {
     const stepPatch: Partial<StepState> = {
       status: event.status as StepState["status"],
       message: event.message ?? event.error ?? "",
@@ -354,6 +351,13 @@ async function processJob(jobId: string): Promise<void> {
 
     jobQueue.emit("step", { jobId, ...event });
   };
+}
+
+async function processJob(jobId: string): Promise<void> {
+  const job = jobQueue.getJob(jobId);
+  if (!job) return;
+
+  const emit = createEmitter(jobId);
 
   let audioCleanup: (() => Promise<void>) | null = null;
 
@@ -712,4 +716,101 @@ parseRouter.post("/api/import", async (c) => {
 
     return c.json({ error: message }, 500);
   }
+});
+
+parseRouter.post("/api/reprompt/:jobId", async (c) => {
+  const jobId = c.req.param("jobId");
+  const job = jobQueue.getJob(jobId);
+
+  if (!job) {
+    return c.json({ error: "Job not found." }, 404);
+  }
+
+  if (!job.metadataDetails || !job.transcriptDetails) {
+    return c.json({ error: "Job does not have cached metadata or transcript for reprompting." }, 400);
+  }
+
+  if (job.status !== "done" && job.status !== "error") {
+    return c.json({ error: "Job is not in a state that allows reprompting." }, 400);
+  }
+
+  if (jobQueue.getActiveJobId() !== null) {
+    return c.json({ error: "Another job is currently processing. Please wait and try again." }, 409);
+  }
+
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON body." }, 400);
+  }
+
+  const customPrompt = typeof (body as Record<string, unknown>).customPrompt === "string"
+    ? ((body as Record<string, unknown>).customPrompt as string).trim()
+    : "";
+
+  if (customPrompt.length > CUSTOM_PROMPT_MAX_LENGTH) {
+    return c.json(
+      { error: `Custom prompt is too long. Keep it under ${CUSTOM_PROMPT_MAX_LENGTH} characters.` },
+      400,
+    );
+  }
+
+  const ok = jobQueue.reprompt(jobId, customPrompt);
+  if (!ok) {
+    return c.json({ error: "Failed to reprompt job." }, 500);
+  }
+
+  const metadata: VideoMetadata = {
+    title: job.metadataDetails.title,
+    description: job.metadataDetails.description ?? "",
+    thumbnailUrl: job.metadataDetails.thumbnailSourceUrl ?? "",
+    duration: job.metadataDetails.duration ?? 0,
+    uploader: job.metadataDetails.uploader ?? "",
+    webpageUrl: job.metadataDetails.webpageUrl ?? "",
+    hasSubtitles: job.metadataDetails.hasSubtitles ?? false,
+    subtitleLanguage: job.metadataDetails.subtitleLanguage ?? null,
+  };
+
+  const emit = createEmitter(jobId);
+
+  process.nextTick(async () => {
+    try {
+      const { preparedImport } = await stepParsing(
+        metadata,
+        job.transcriptDetails!.transcript,
+        job.translate,
+        customPrompt,
+        job.url,
+        emit,
+      );
+
+      if (jobQueue.isCancelled(jobId)) return;
+
+      if (!job.autoImport) {
+        jobQueue.updateStep(jobId, "importing", {
+          status: "idle",
+          message: "Ready to import when you are.",
+        });
+        jobQueue.emit("step", {
+          jobId,
+          step: "importing",
+          status: "idle",
+          message: "Ready to import when you are.",
+        });
+        jobQueue.review(jobId);
+        return;
+      }
+
+      const result = await stepImporting(preparedImport, metadata.thumbnailUrl, emit);
+      jobQueue.complete(jobId, result.recipeUrl);
+    } catch (err) {
+      if (jobQueue.isCancelled(jobId)) return;
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[parse] Reprompt error for job ${jobId}: ${message}`);
+      jobQueue.fail(jobId, message);
+    }
+  });
+
+  return c.json({ success: true, jobId });
 });

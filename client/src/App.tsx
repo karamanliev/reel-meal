@@ -20,6 +20,14 @@ export default function App() {
   const showProgressCard = selectedJob !== null;
 
   useEffect(() => {
+    if (!selectedJob) return;
+    if (selectedJob.phase === "review" && !selectedJob.expandedDetails.parsing && selectedJob.parsingDetails) {
+      q.toggleDetails(selectedJob.id, "parsing");
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedJob?.phase, selectedJob?.id]);
+
+  useEffect(() => {
     if (q.selectedJobId) return;
     if (q.jobs.length === 0) return;
     const active = q.jobs.find((j) => j.phase === "loading");
@@ -49,6 +57,11 @@ export default function App() {
           selectedJob.phase === "review" &&
           Boolean(selectedJob.parsingDetails) &&
           !selectedJob.recipeUrl,
+        showRepromptPanel:
+          (selectedJob.phase === "review" || q.repromptingJobId === selectedJob.id) &&
+          Boolean(selectedJob.metadataDetails) &&
+          Boolean(selectedJob.transcriptDetails) &&
+          !selectedJob.recipeUrl,
       }
     : {
         parsingDiff: null as Parameters<typeof ProgressCard>[0]["parsingDiff"],
@@ -65,6 +78,7 @@ export default function App() {
         showDiffView: false,
         showImportPreview: false,
         showManualImportPanel: false,
+        showRepromptPanel: false,
       };
 
   return (
@@ -114,6 +128,11 @@ export default function App() {
             showDiffView={selectedJobDerived.showDiffView}
             showImportPreview={selectedJobDerived.showImportPreview}
             showManualImportPanel={selectedJobDerived.showManualImportPanel}
+            showRepromptPanel={selectedJobDerived.showRepromptPanel}
+            customPrompt={selectedJob.customPrompt}
+            customPromptMaxLength={q.customPromptMaxLength}
+            repromptLoading={q.repromptingJobId === selectedJob.id}
+            onReprompt={(customPrompt) => q.reprompt(selectedJob.id, customPrompt)}
             toggleDetails={(step) => q.toggleDetails(selectedJob.id, step)}
             handleManualImport={() => q.handleManualImport(selectedJob.id)}
             reset={() => q.removeJob(selectedJob.id)}

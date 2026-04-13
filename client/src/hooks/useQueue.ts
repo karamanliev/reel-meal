@@ -70,13 +70,15 @@ export function useQueue() {
   const eventSourceRef = useRef<EventSource | null>(null);
   const eventBufferRef = useRef<{ event: string; data: string }[]>([]);
   const snapshotProcessedRef = useRef(false);
+  const repromptingJobIdRef = useRef<string | null>(null);
 
-  const [url, setUrl] = useState(getInitialUrl);
+const [url, setUrl] = useState(getInitialUrl);
   const [translate, setTranslate] = useState(false);
   const [extractTranscript, setExtractTranscript] = useState(true);
   const [autoImport, setAutoImport] = useState(true);
   const [useCustomPrompt, setUseCustomPrompt] = useState(false);
   const [customPrompt, setCustomPrompt] = useState("");
+  const [repromptingJobId, setRepromptingJobId] = useState<string | null>(null);
 
   const updateJob = useCallback(
     (jobId: string, patch: Partial<JobState>) => {
@@ -245,18 +247,30 @@ export function useQueue() {
           recipeUrl: string;
         };
         updateJob(jobId, { status: "done", recipeUrl });
+        if (repromptingJobIdRef.current === jobId) {
+          setRepromptingJobId(null);
+          repromptingJobIdRef.current = null;
+        }
         return;
       }
 
       if (event === "job-review") {
         const { jobId } = JSON.parse(dataStr) as { jobId: string };
         updateJob(jobId, { status: "done" });
+        if (repromptingJobIdRef.current === jobId) {
+          setRepromptingJobId(null);
+          repromptingJobIdRef.current = null;
+        }
         return;
       }
 
       if (event === "job-error") {
         const { jobId, error } = JSON.parse(dataStr) as { jobId: string; error: string };
         updateJob(jobId, { status: "error", errorMessage: error ?? "An unexpected error occurred." });
+        if (repromptingJobIdRef.current === jobId) {
+          setRepromptingJobId(null);
+          repromptingJobIdRef.current = null;
+        }
         return;
       }
 
@@ -557,6 +571,71 @@ export function useQueue() {
     [updateJob, handleManualImport],
   );
 
+  const reprompt = useCallback(
+    async (jobId: string, customPrompt: string) => {
+      const job = jobsRef.current.get(jobId);
+      if (!job) return;
+
+      const prevParsingStep = { ...job.steps.parsing };
+      const prevImportingStep = { ...job.steps.importing };
+      const prevCustomPrompt = job.customPrompt;
+      const prevParsingDetails = job.parsingDetails;
+      const prevRecipeUrl = job.recipeUrl;
+      const prevManualImportError = job.manualImportError;
+
+      setRepromptingJobId(jobId);
+      repromptingJobIdRef.current = jobId;
+      updateJobStep(jobId, "parsing", {
+        status: "loading",
+        message: "Re-generating recipe with AI...",
+      });
+      updateJobStep(jobId, "importing", { status: "idle", message: "" });
+      updateJob(jobId, {
+        customPrompt,
+        parsingDetails: null,
+        recipeUrl: null,
+        errorMessage: null,
+        manualImportError: null,
+      });
+
+      try {
+        const res = await fetch(`/api/reprompt/${jobId}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ customPrompt }),
+        });
+
+        if (!res.ok) {
+          const data = (await res.json().catch(() => ({}))) as { error?: string };
+          updateJobStep(jobId, "parsing", prevParsingStep);
+          updateJobStep(jobId, "importing", prevImportingStep);
+          updateJob(jobId, {
+            customPrompt: prevCustomPrompt,
+            parsingDetails: prevParsingDetails,
+            recipeUrl: prevRecipeUrl,
+            errorMessage: data.error || "Reprompt failed.",
+            manualImportError: prevManualImportError,
+          });
+          setRepromptingJobId(null);
+          repromptingJobIdRef.current = null;
+        }
+      } catch {
+        updateJobStep(jobId, "parsing", prevParsingStep);
+        updateJobStep(jobId, "importing", prevImportingStep);
+        updateJob(jobId, {
+          customPrompt: prevCustomPrompt,
+          parsingDetails: prevParsingDetails,
+          recipeUrl: prevRecipeUrl,
+          errorMessage: "Failed to reprompt. Please try again.",
+          manualImportError: prevManualImportError,
+        });
+        setRepromptingJobId(null);
+          repromptingJobIdRef.current = null;
+      }
+    },
+    [updateJob, updateJobStep],
+  );
+
   const handleSubmit = useCallback(
     (e: React.FormEvent) => {
       e.preventDefault();
@@ -602,6 +681,8 @@ export function useQueue() {
     toggleDetails,
     handleManualImport,
     toggleAutoImport,
+    reprompt,
+    repromptingJobId,
     getSelectedJob,
   };
 }

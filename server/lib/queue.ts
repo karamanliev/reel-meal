@@ -209,6 +209,10 @@ class JobQueue extends EventEmitter {
     return this.jobs.get(jobId);
   }
 
+  getActiveJobId(): string | null {
+    return this.activeJobId;
+  }
+
   getSnapshot(): object[] {
     return Array.from(this.jobs.values())
       .filter((j) => j.status !== "cancelled")
@@ -226,6 +230,35 @@ class JobQueue extends EventEmitter {
     const job = this.jobs.get(jobId);
     if (!job) return;
     Object.assign(job, patch);
+  }
+
+  reprompt(jobId: string, newCustomPrompt: string): boolean {
+    const job = this.jobs.get(jobId);
+    if (!job) return false;
+    if (!job.metadataDetails || !job.transcriptDetails) return false;
+    if (job.status !== "done" && job.status !== "error") return false;
+    if (this.activeJobId !== null && this.activeJobId !== jobId) return false;
+
+    job.customPrompt = newCustomPrompt;
+    job.status = "active";
+    job.parsingDetails = null;
+    job.recipeUrl = null;
+    job.errorMessage = null;
+    job.steps.parsing = { status: "loading", message: "Re-generating recipe with AI..." };
+    job.steps.importing = { status: "idle", message: "" };
+
+    this.activeJobId = jobId;
+    this.cancelledIds.delete(jobId);
+
+    this.emit("job:start", jobId);
+    this.emit("step", {
+      jobId,
+      step: "parsing",
+      status: "loading",
+      message: "Re-generating recipe with AI...",
+    });
+
+    return true;
   }
 
   private toJson(job: Job): object {

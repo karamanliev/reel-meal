@@ -150,4 +150,4 @@ npm start
 ## Todo
 
 - [x] Video queuing
-- [ ] Reprompt the model for changes when auto-import is off
+- [x] Reprompt the model for changes when auto-import is off
