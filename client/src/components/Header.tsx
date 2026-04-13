@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import saladMascot from "../assets/images/salad.png";
-import linkIcon from "../assets/icons/link.svg";
+import linkIcon from "../assets/icons/link.svg?raw";
 import { QueueTrigger } from "./QueueTrigger";
+import { Icon } from "./Icon";
 
 interface HeaderProps {
   queueCount: number;
@@ -52,7 +53,7 @@ export function Header({ queueCount, onQueueClick }: HeaderProps) {
                 className="neo-btn-secondary no-underline gap-1.5 !px-3 !py-2 text-[0.82rem]"
                 title="Open your Mealie instance"
               >
-                <img src={linkIcon} alt="" className="h-4 w-4" />
+                <Icon src={linkIcon} className="h-5 w-5" />
                 <span className="hidden sm:inline">Mealie</span>
               </a>
             )}

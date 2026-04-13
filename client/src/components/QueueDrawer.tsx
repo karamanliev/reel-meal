@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import type { JobState } from "../lib/types";
 
 interface QueueDrawerProps {
@@ -10,7 +10,6 @@ interface QueueDrawerProps {
   cancelJob: (jobId: string) => void;
   removeJob: (jobId: string) => void;
   toggleAutoImport: (jobId: string, value: boolean) => void;
-  addJob: (url: string) => void;
 }
 
 function JobStatusBadge({ phase }: { phase: JobState["phase"] }) {
@@ -197,18 +196,8 @@ export function QueueDrawer({
   cancelJob,
   removeJob,
   toggleAutoImport,
-  addJob,
 }: QueueDrawerProps) {
   const drawerRef = useRef<HTMLDivElement>(null);
-  const [urlInput, setUrlInput] = useState("");
-
-  const handleAdd = (e: React.FormEvent) => {
-    e.preventDefault();
-    const trimmed = urlInput.trim();
-    if (!trimmed) return;
-    addJob(trimmed);
-    setUrlInput("");
-  };
 
   useEffect(() => {
     if (!open) return;
@@ -278,27 +267,6 @@ export function QueueDrawer({
             </svg>
           </button>
         </div>
-
-        {/* URL input */}
-        <form onSubmit={handleAdd} className="border-b-3 border-solid border-black/10 px-3 py-3">
-          <div className="flex gap-2">
-            <input
-              type="url"
-              placeholder="Paste a URL to add..."
-              value={urlInput}
-              onChange={(e) => setUrlInput(e.target.value)}
-              className="neo-input min-h-[42px] flex-1 !text-[0.85rem] !py-2 !px-3"
-              required
-            />
-            <button
-              type="submit"
-              disabled={!urlInput.trim()}
-              className="neo-btn min-h-[42px] bg-sun whitespace-nowrap !text-[0.85rem] hover:bg-[#ffe08f] disabled:opacity-100 disabled:bg-[#e5e5e5] disabled:text-[#5b5b5b] disabled:shadow-neo-pressed"
-            >
-              Add
-            </button>
-          </div>
-        </form>
 
         {/* Item list */}
         <div className="flex-1 overflow-y-auto p-3">

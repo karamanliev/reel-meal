@@ -16,6 +16,13 @@ import { MetadataDetails } from "./MetadataDetails";
 import { TranscriptDetails } from "./TranscriptDetails";
 import { ParsingDetails } from "./ParsingDetails";
 import burgerAndChipsMascot from "../assets/images/burger_n_chips.png";
+import crossIcon from "../assets/icons/cross.svg?raw";
+import deleteIcon from "../assets/icons/delete.svg?raw";
+import hideIcon from "../assets/icons/hide.svg?raw";
+import unhideIcon from "../assets/icons/unhide.svg?raw";
+import heartIcon from "../assets/icons/heart.svg?raw";
+import syncIcon from "../assets/icons/sync.svg?raw";
+import { Icon } from "./Icon";
 
 interface ProgressCardProps {
   phase: Phase;
@@ -46,6 +53,7 @@ interface ProgressCardProps {
   toggleDetails: (step: StepName) => void;
   handleManualImport: () => void;
   reset: () => void;
+  onCancel: () => void;
   queuePosition?: number;
   queueTotal?: number;
 }
@@ -80,6 +88,8 @@ export function ProgressCard(props: ProgressCardProps) {
   }, [props.customPrompt]);
 
   React.useEffect(() => {
+    const active = document.activeElement;
+    if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT")) return;
     const loadingStep = (Object.keys(props.steps) as StepName[]).find(
       (s) => props.steps[s].status === "loading",
     ) ?? null;
@@ -209,15 +219,28 @@ export function ProgressCard(props: ProgressCardProps) {
                 )}
               </div>
 
-              {hasDetails && (
-                <div className="col-span-2 sm:col-span-1 sm:col-start-2 sm:justify-self-end">
-                  <button
-                    type="button"
-                    className="neo-btn-secondary w-full px-4 py-2 text-sm sm:w-auto"
-                    onClick={() => props.toggleDetails(step.id)}
-                  >
-                    {detailsOpen ? "Hide details" : "Show details"}
-                  </button>
+              {(hasDetails || state.status === "loading") && (
+                <div className="col-span-2 sm:col-span-1 sm:col-start-2 sm:justify-self-end flex gap-2">
+                  {state.status === "loading" && (
+                    <button
+                      type="button"
+                      onClick={props.onCancel}
+                      className="neo-btn-secondary w-full gap-1.5 px-4 py-2 text-sm sm:w-auto !border-[#8d1e1e]/50 !text-[#8d1e1e] hover:!bg-[#fde8e8] hover:!border-[#8d1e1e]"
+                    >
+                      <Icon src={crossIcon} className="h-3.5 w-3.5" />
+                      Cancel
+                    </button>
+                  )}
+                  {hasDetails && (
+                    <button
+                      type="button"
+                      className="neo-btn-secondary w-full gap-1.5 px-4 py-2 text-sm sm:w-auto"
+                      onClick={() => props.toggleDetails(step.id)}
+                    >
+                      <Icon src={detailsOpen ? hideIcon : unhideIcon} className="h-5 w-5" />
+                      {detailsOpen ? "Hide details" : "Show details"}
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -276,6 +299,7 @@ export function ProgressCard(props: ProgressCardProps) {
               onClick={() => props.onReprompt(repromptValue)}
               disabled={props.repromptLoading}
             >
+              <Icon src={syncIcon} className="h-5 w-5" />
               {props.repromptLoading ? "Re-generating..." : "Re-generate recipe"}
             </button>
           </div>
@@ -309,6 +333,19 @@ export function ProgressCard(props: ProgressCardProps) {
                   </p>
                 )}
               </div>
+
+              {state.status === "loading" && (
+                <div className="col-span-2 sm:col-span-1 sm:col-start-2 sm:justify-self-end">
+                  <button
+                    type="button"
+                    onClick={props.onCancel}
+                    className="neo-btn-secondary w-full gap-1.5 px-4 py-2 text-sm sm:w-auto !border-[#8d1e1e]/50 !text-[#8d1e1e] hover:!bg-[#fde8e8] hover:!border-[#8d1e1e]"
+                  >
+                    <Icon src={crossIcon} className="h-3.5 w-3.5" />
+                    Cancel
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         );
@@ -336,6 +373,7 @@ export function ProgressCard(props: ProgressCardProps) {
               onClick={props.handleManualImport}
               disabled={props.isLoading}
             >
+              <Icon src={heartIcon} className="h-5 w-5" />
               Import now
             </button>
           </div>
@@ -382,6 +420,7 @@ export function ProgressCard(props: ProgressCardProps) {
               </p>
             </div>
             <button className="neo-btn-primary" onClick={props.reset}>
+              <Icon src={deleteIcon} className="h-5 w-5" />
               Dismiss
             </button>
           </div>

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import layerIcon from "../assets/icons/layer.svg";
+import layerIcon from "../assets/icons/layer.svg?raw";
+import { Icon } from "./Icon";
 
 interface QueueTriggerProps {
   count: number;
@@ -25,9 +26,9 @@ export function QueueTrigger({ count, onClick }: QueueTriggerProps) {
       type="button"
       title="Processing queue"
       onClick={onClick}
-      className={`neo-btn-secondary gap-1.5 bg-blue text-white hover:bg-[#7bb8e8] !px-3 !py-2 text-[0.82rem] ${animating ? "animate-pop" : ""}`}
+      className={`neo-btn-secondary gap-1.5 bg-blue text-ink hover:bg-[#7bb8e8] !px-3 !py-2 text-[0.82rem] ${animating ? "animate-pop" : ""}`}
     >
-      <img src={layerIcon} alt="" className="h-4 w-4" />
+      <Icon src={layerIcon} className="h-5 w-5" />
       {count > 0 && <span className="font-800">{count}</span>}
     </button>
   );

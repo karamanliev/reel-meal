@@ -18,6 +18,7 @@ export default function App() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const selectedJob = q.getSelectedJob();
   const showProgressCard = selectedJob !== null;
+  const hasJobs = q.jobs.length > 0;
 
   useEffect(() => {
     if (!selectedJob) return;
@@ -102,6 +103,7 @@ export default function App() {
           setCustomPrompt={q.setCustomPrompt}
           customPromptMaxLength={q.customPromptMaxLength}
           onSubmit={q.handleSubmit}
+          hasJobs={hasJobs}
         />
 
         {showProgressCard && selectedJob && (
@@ -133,6 +135,7 @@ export default function App() {
             onReprompt={(customPrompt) => q.reprompt(selectedJob.id, customPrompt)}
             toggleDetails={(step) => q.toggleDetails(selectedJob.id, step)}
             handleManualImport={() => q.handleManualImport(selectedJob.id)}
+            onCancel={() => q.cancelJob(selectedJob.id)}
             reset={() => q.removeJob(selectedJob.id)}
             queuePosition={selectedJob.position}
             queueTotal={selectedJob.totalInQueue}
@@ -151,7 +154,6 @@ export default function App() {
         cancelJob={q.cancelJob}
         removeJob={q.removeJob}
         toggleAutoImport={q.toggleAutoImport}
-        addJob={q.addJob}
       />
     </div>
   );
