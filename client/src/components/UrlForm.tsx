@@ -66,35 +66,24 @@ export function UrlForm({
   onSubmit,
   hasJobs,
 }: UrlFormProps) {
-  const [isExpanded, setIsExpanded] = useState(true);
-  const hasCollapsedRef = useRef(false);
+  const [isExpanded, setIsExpanded] = useState(() => !hasJobs);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (!hasJobs && hasCollapsedRef.current) {
-      setIsExpanded(true);
-    } else if (hasJobs && !hasCollapsedRef.current) {
-      setIsExpanded(false);
-      hasCollapsedRef.current = true;
-    }
-  }, [hasJobs]);
-
-  useEffect(() => {
-    if (isExpanded) {
-      // Delay focus until after the expand animation completes
+    if (!hasJobs || isExpanded) {
+      const delay = hasJobs ? 310 : 0;
       const timer = setTimeout(() => {
         inputRef.current?.focus();
-      }, 310);
+      }, delay);
       return () => clearTimeout(timer);
     }
-  }, [isExpanded]);
+  }, [hasJobs, isExpanded]);
 
   const handleFormSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!url.trim()) return;
     onSubmit(e);
     setIsExpanded(false);
-    hasCollapsedRef.current = true;
   };
 
   const submitLabel = hasJobs

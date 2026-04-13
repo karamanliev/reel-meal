@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useMemo, useCallback } from "react";
+import { useEffect, useState, useMemo, useCallback } from "react";
 import burgerSvg from "../assets/icons/burger.svg?raw";
 import cakeSvg from "../assets/icons/cake.svg?raw";
 import eggSvg from "../assets/icons/egg.svg?raw";
@@ -65,8 +65,9 @@ function generatePlacements(): Placement[] {
 }
 
 export function BackgroundIcons() {
-  const containerRef = useRef<HTMLDivElement>(null);
   const [mousePos, setMousePos] = useState({ x: -9999, y: -9999 });
+  const [viewport, setViewport] = useState({ width: 1, height: 1 });
+  const [frameTime, setFrameTime] = useState(0);
   const [raf, setRaf] = useState(0);
 
   const placements = useMemo(() => generatePlacements(), []);
@@ -75,6 +76,7 @@ export function BackgroundIcons() {
     (e: MouseEvent) => {
       cancelAnimationFrame(raf);
       const id = requestAnimationFrame(() => {
+        setFrameTime(performance.now());
         setMousePos({ x: e.clientX, y: e.clientY });
       });
       setRaf(id);
@@ -83,8 +85,15 @@ export function BackgroundIcons() {
   );
 
   useEffect(() => {
+    const updateViewport = () => {
+      setViewport({ width: window.innerWidth, height: window.innerHeight });
+    };
+
+    updateViewport();
+    window.addEventListener("resize", updateViewport);
     window.addEventListener("mousemove", handleMouseMove);
     return () => {
+      window.removeEventListener("resize", updateViewport);
       window.removeEventListener("mousemove", handleMouseMove);
       cancelAnimationFrame(raf);
     };
@@ -92,23 +101,19 @@ export function BackgroundIcons() {
 
   return (
     <div
-      ref={containerRef}
       className="pointer-events-none fixed inset-0 z-0 overflow-hidden"
       aria-hidden="true"
     >
       {placements.map((p) => {
-        const el = containerRef.current;
-        const w = el ? el.clientWidth : 1;
-        const h = el ? el.clientHeight : 1;
-        const px = (p.x / 100) * w;
-        const py = (p.y / 100) * h;
+        const px = (p.x / 100) * viewport.width;
+        const py = (p.y / 100) * viewport.height;
         const dx = mousePos.x - px;
         const dy = mousePos.y - py;
         const dist = Math.hypot(dx, dy);
         const threshold = 220;
         const proximity = Math.max(0, 1 - dist / threshold);
 
-        const wiggle = proximity * 12 * Math.sin(Date.now() / 180 + p.id);
+        const wiggle = proximity * 12 * Math.sin(frameTime / 180 + p.id);
         const tilt = proximity * (dx > 0 ? 8 : -8);
         const scale = 1 + proximity * 0.25;
         const rotation = p.baseRotation + tilt + wiggle;

@@ -19,6 +19,7 @@ export default function App() {
   const selectedJob = q.getSelectedJob();
   const showProgressCard = selectedJob !== null;
   const hasJobs = q.jobs.length > 0;
+  const { jobs, selectedJobId, selectJob } = q;
 
   useEffect(() => {
     if (!selectedJob) return;
@@ -29,14 +30,14 @@ export default function App() {
   }, [selectedJob?.phase, selectedJob?.id]);
 
   useEffect(() => {
-    if (q.selectedJobId) return;
-    if (q.jobs.length === 0) return;
-    const active = q.jobs.find((j) => j.phase === "loading");
-    const review = q.jobs.find((j) => j.phase === "review");
-    const queued = q.jobs.find((j) => j.phase === "queued");
+    if (selectedJobId) return;
+    if (jobs.length === 0) return;
+    const active = jobs.find((j) => j.phase === "loading");
+    const review = jobs.find((j) => j.phase === "review");
+    const queued = jobs.find((j) => j.phase === "queued");
     const pick = active ?? review ?? queued;
-    if (pick) q.selectJob(pick.id);
-  }, [q.jobs, q.selectedJobId, q.selectJob]);
+    if (pick) selectJob(pick.id);
+  }, [jobs, selectedJobId, selectJob]);
 
   const selectedJobDerived = selectedJob?.parsingDetails
     ? {
@@ -158,4 +159,3 @@ export default function App() {
     </div>
   );
 }
-

@@ -79,8 +79,6 @@ const STEP_ACCENT: Record<string, { surface: string; chip: string }> = {
 
 export function ProgressCard(props: ProgressCardProps) {
   const [repromptValue, setRepromptValue] = React.useState(props.customPrompt);
-  const repromptValueRef = React.useRef(props.customPrompt);
-  repromptValueRef.current = repromptValue;
   const prevLoadingStepRef = React.useRef<StepName | null>(null);
 
   React.useEffect(() => {
