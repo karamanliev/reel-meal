@@ -6,9 +6,24 @@ Paste a link, let ReelMeal pull the metadata and transcript, then send the clean
 
 ## Screenshots
 
-<p align="center">
-  <img src="./screenshot_desktop.png" alt="ReelMeal desktop screenshot" width="78%" />
-  <img src="./screenshot_mobile.png" alt="ReelMeal mobile screenshot" width="20%" />
+### Desktop
+
+<p>
+  <img src=".github/screenshot_desktop.webp" alt="ReelMeal desktop view" width="49%" />
+  <img src=".github/screenshot_desktop_2.webp" alt="ReelMeal desktop view - additional feature" width="49%" />
+</p>
+
+### Mobile
+
+<p>
+  <img src=".github/screenshot_mobile.webp" alt="ReelMeal mobile view" width="30%" />
+  <img src=".github/screenshot_mobile_2.webp" alt="ReelMeal mobile view - additional feature" width="30%" />
+</p>
+
+### Imported Recipe
+
+<p>
+  <img src=".github/screenshot_imported_recipe.webp" alt="Recipe imported into Mealie" width="80%" />
 </p>
 
 ## What it does
