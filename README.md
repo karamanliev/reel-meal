@@ -166,4 +166,5 @@ npm start
 
 - [x] Video queuing
 - [x] Reprompt the model for changes when auto-import is off
+- [ ] Support images, recipe page links, and pasted text as recipe inputs
 - [ ] Options/settings panel (in-app UI) instead of editing `.env` manually
