@@ -4,7 +4,7 @@ import { streamSSE } from "hono/streaming";
 import { readFile } from "node:fs/promises";
 import { fetchMetadata, extractSubtitles, downloadAudio, type VideoMetadata } from "../lib/ytdlp.js";
 import { transcribeAudio } from "../lib/transcribe.js";
-import { parseRecipeSource } from "../lib/llm.js";
+import { parseRecipeSource, IncompleteRecipeError } from "../lib/llm.js";
 import { importRecipe, prepareRecipeImport } from "../lib/mealie.js";
 import { assetManager, type ManagedAsset } from "../lib/assets.js";
 import { extractRecipeWebpage } from "../lib/webpage.js";
@@ -107,10 +107,11 @@ async function generate(job: Job, emit: Emit): Promise<void> {
   if (!job.normalizedContext) throw new Error("Prepared source context is missing.");
   await emit({ step: "generation", status: "loading", message: job.resolvedSourceType === "images" ? "Reading images and generating recipe with AI..." : "Generating recipe with AI..." });
   let generated;
-  try { generated = await parseRecipeSource({ jobId: job.id, context: job.normalizedContext, translate: job.translate, customPrompt: job.customPrompt || undefined }); }
+  try { generated = await parseRecipeSource({ jobId: job.id, context: job.normalizedContext, customPrompt: job.customPrompt || undefined }); }
   catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (job.resolvedSourceType === "images" && /image|vision|content.*type|multimodal/i.test(message)) throw new Error(`The configured OPENAI_MODEL may not support image input: ${message}`);
+    const looksLikeVisionCapabilityError = /(?:support[^.]*(?:image|vision|multimodal)|(?:image|vision|multimodal)[^.]*support|image_url)/i.test(message);
+    if (job.resolvedSourceType === "images" && !(error instanceof IncompleteRecipeError) && looksLikeVisionCapabilityError) throw new Error(`The configured OPENAI_MODEL may not support image input: ${message}`);
     throw error;
   }
   const orgUrl = job.normalizedContext.kind === "text" && (job.resolvedSourceType === "video" || job.resolvedSourceType === "webpage") ? job.normalizedContext.attributionUrl : "";
@@ -174,7 +175,7 @@ parseRouter.post("/api/parse", bodyLimit({ maxSize: MAX_MULTIPART_BYTES, onError
       const raw = await c.req.json<Record<string, unknown>>(); const url = typeof raw.url === "string" ? raw.url.trim() : "";
       if (!url) return c.json({ error: "Missing required field: url" }, 400); jobId = safeJobId(typeof raw.jobId === "string" ? raw.jobId : "");
       const customPrompt = typeof raw.customPrompt === "string" ? raw.customPrompt.trim() : ""; if (customPrompt.length > MAX_CUSTOM_PROMPT_CHARS) return c.json({ error: "Custom prompt is too long." }, 400);
-      const job = jobQueue.add({ id: jobId, source: { kind: "url", url }, displayLabel: url, sourceAssets: [], customImage: null, translate: raw.translate === true, extractTranscript: raw.extractTranscript !== false, autoImport: raw.autoImport !== false, customPrompt });
+      const job = jobQueue.add({ id: jobId, source: { kind: "url", url }, displayLabel: url, sourceAssets: [], customImage: null, extractTranscript: raw.extractTranscript !== false, autoImport: raw.autoImport !== false, customPrompt });
       return c.json({ jobId: job.id });
     }
     if (!contentType.includes("multipart/form-data")) return c.json({ error: "Use JSON or multipart form data." }, 415);
@@ -191,7 +192,7 @@ parseRouter.post("/api/parse", bodyLimit({ maxSize: MAX_MULTIPART_BYTES, onError
     let source: SubmittedSource;
     if (kind === "url") source = { kind: "url", url: value }; else if (kind === "text") source = { kind: "text", text: assertModelInputLength(value) }; else { if (!sourceAssets.length) throw new Error("Choose at least one source image."); source = { kind: "images", assetIds: sourceAssets.map((asset) => asset.id) }; }
     const displayLabel = source.kind === "url" ? source.url : source.kind === "text" ? source.text.slice(0, 80) : `${sourceAssets.length} recipe image${sourceAssets.length === 1 ? "" : "s"}`;
-    const job = jobQueue.add({ id: jobId, source, displayLabel, sourceAssets, customImage, translate: bool(field(body, "translate"), false), extractTranscript: bool(field(body, "extractTranscript"), true), autoImport: bool(field(body, "autoImport"), true), customPrompt });
+    const job = jobQueue.add({ id: jobId, source, displayLabel, sourceAssets, customImage, extractTranscript: bool(field(body, "extractTranscript"), true), autoImport: bool(field(body, "autoImport"), true), customPrompt });
     return c.json({ jobId: job.id });
   } catch (error) { if (jobId && !jobQueue.getJob(jobId)) await assetManager.cleanupJob(jobId).catch(() => {}); return c.json({ error: error instanceof Error ? error.message : String(error) }, 400); }
 });

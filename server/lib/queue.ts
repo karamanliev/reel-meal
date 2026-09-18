@@ -44,7 +44,6 @@ export interface JobParams {
   displayLabel: string;
   sourceAssets: ManagedAsset[];
   customImage: ManagedAsset | null;
-  translate: boolean;
   extractTranscript: boolean;
   autoImport: boolean;
   customPrompt: string;
@@ -142,8 +141,7 @@ export class JobQueue extends EventEmitter {
   }
 
   private toJson(job: Job): object {
-    return { id: job.id, sourceKind: job.source.kind, displayLabel: job.displayLabel, translate: job.translate,
-      extractTranscript: job.extractTranscript, autoImport: job.autoImport, customPrompt: job.customPrompt, status: job.status,
+    return { id: job.id, sourceKind: job.source.kind, displayLabel: job.displayLabel, extractTranscript: job.extractTranscript, autoImport: job.autoImport, customPrompt: job.customPrompt, status: job.status,
       addedAt: job.addedAt, steps: { ...job.steps }, resolvedSourceType: job.resolvedSourceType, recipeTitle: job.recipeTitle,
       thumbnailUrl: job.thumbnailUrl, recipeUrl: job.recipeUrl, errorMessage: job.errorMessage, warnings: [...job.warnings],
       sourceDetails: job.sourceDetails, extractedContentDetails: job.extractedContentDetails, parsingDetails: job.parsingDetails,

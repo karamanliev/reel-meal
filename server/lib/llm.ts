@@ -55,13 +55,23 @@ export interface ParsedRecipe {
   nutrition?: RecipeNutrition;
 }
 
+// Thrown when the source does not contain a complete, usable recipe. Kept
+// separate from provider/API failures so callers do not mistake it for a
+// model-capability error.
+export class IncompleteRecipeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "IncompleteRecipeError";
+  }
+}
+
 // -------------------------------------------------------------------------
 // System prompt
 // -------------------------------------------------------------------------
 
 const SYSTEM_PROMPT_TEMPLATE = `You are a culinary assistant that converts recipe content into structured JSON.
 
-Given source recipe content from a video, webpage, pasted text, or ordered image set, extract one complete recipe and output a valid JSON object. Output ONLY the JSON object, with no markdown fences or explanation. If the source does not contain both usable ingredients and usable instructions, output {"noRecipe":true,"reason":"brief explanation"}. Never invent a missing half of a recipe.
+Given source recipe content from a video, webpage, pasted text, or ordered image set, extract one complete recipe and output a valid JSON object. Output ONLY the JSON object, with no markdown fences or explanation. If the source does not contain both usable ingredients and usable instructions, output {"noRecipe":true,"reason":"brief explanation in English"}. Never invent a missing half of a recipe.
 
 Schema:
 {
@@ -105,7 +115,8 @@ Rules:
 - Use human-readable duration strings for times, such as "15 minutes", "35 min", or "1 hour 30 minutes".
 - If a value is not mentioned, use null (not empty string, not 0).
 - Only include recipeServings if the source EXPLICITLY states servings. Do not infer it.
-- Never translate, localize, or rewrite the recipe into another language unless the LANGUAGE rule below explicitly tells you to do so.
+- Preserve the original language of the recipe unless the Additional User Instructions explicitly request a translation.
+- If you return {"noRecipe":true}, write the reason in English regardless of the source language.
 - Prefer fewer, more meaningful instruction steps over many tiny ones.
   - Combine consecutive actions that naturally belong together in real cooking.
   - Usually a normal recipe should land around 6-10 steps, but adapt to recipe complexity.
@@ -153,14 +164,10 @@ Ingredient parsing rules — these are CRITICAL for correct import:
 - LANGUAGE: {{LANGUAGE_RULE}}`;
 
 const LANGUAGE_RULE_KEEP =
-  "Keep ALL text in the original language of the recipe, including name, description, ingredients, units, notes, instructions, categories, and tags. Do NOT translate, localize, or normalize text into another language.";
+  "Keep ALL text in the original language of the recipe, including name, description, ingredients, units, notes, instructions, categories, and tags, unless the Additional User Instructions explicitly request a translation or language change.";
 
-const LANGUAGE_RULE_TRANSLATE =
-  "Translate ALL text (name, description, ingredients, instructions, notes, categories, tags) into English.";
-
-function buildSystemPrompt(translate: boolean): string {
-  const rule = translate ? LANGUAGE_RULE_TRANSLATE : LANGUAGE_RULE_KEEP;
-  return SYSTEM_PROMPT_TEMPLATE.replace("{{LANGUAGE_RULE}}", rule);
+function buildSystemPrompt(): string {
+  return SYSTEM_PROMPT_TEMPLATE.replace("{{LANGUAGE_RULE}}", LANGUAGE_RULE_KEEP);
 }
 
 // -------------------------------------------------------------------------
@@ -188,10 +195,9 @@ export interface RecipeGenerationResult {
 export async function buildModelMessages(params: {
   jobId: string;
   context: NormalizedSourceContext;
-  translate?: boolean;
   customPrompt?: string;
 }): Promise<ChatCompletionMessageParam[]> {
-  const system = buildSystemPrompt(params.translate ?? false);
+  const system = buildSystemPrompt();
   if (params.context.kind === "text") {
     const content = assertModelInputLength(
       `Source type: ${params.context.sourceType}\nTitle: ${params.context.title}\nDescription: ${params.context.description || "(none)"}\nAttribution URL: ${params.context.attributionUrl || "(none)"}\nExtraction method: ${params.context.extractionMethod}\n\nSource content:\n${params.context.body}${customInstructions(params.customPrompt)}`,
@@ -212,7 +218,6 @@ export async function buildModelMessages(params: {
 export async function parseRecipeSource(params: {
   jobId: string;
   context: NormalizedSourceContext;
-  translate?: boolean;
   customPrompt?: string;
 }): Promise<RecipeGenerationResult> {
   const messages = await buildModelMessages(params);
@@ -241,7 +246,7 @@ export async function parseRecipeSource(params: {
       if (!content) throw new Error("LLM returned empty content");
 
       const result = parseJsonResponse(content);
-      if (result.noRecipe === true) throw new Error(typeof result.reason === "string" ? `No complete recipe found: ${result.reason}` : "No complete recipe found in the source.");
+      if (result.noRecipe === true) throw new IncompleteRecipeError(typeof result.reason === "string" ? `No complete recipe found: ${result.reason}` : "No complete recipe found in the source.");
       const recipe = result as unknown as ParsedRecipe;
       validateRecipe(recipe);
       const rawIndex = result.preferredSourceImageIndex;
@@ -295,7 +300,7 @@ function validateRecipe(recipe: unknown): asserts recipe is ParsedRecipe {
   }
 
   if (r["recipeIngredient"].length === 0) {
-    throw new Error("Recipe has empty recipeIngredient array");
+    throw new IncompleteRecipeError("Recipe has empty recipeIngredient array");
   }
 
   if (!Array.isArray(r["recipeInstructions"])) {
@@ -303,12 +308,12 @@ function validateRecipe(recipe: unknown): asserts recipe is ParsedRecipe {
   }
 
   if (r["recipeInstructions"].length === 0) {
-    throw new Error("Recipe has empty recipeInstructions array");
+    throw new IncompleteRecipeError("Recipe has empty recipeInstructions array");
   }
 
   const usableIngredients = r["recipeIngredient"].filter((item) => item && typeof item === "object" && (typeof (item as Record<string, unknown>).originalText === "string" || (item as Record<string, unknown>).food));
   const usableInstructions = r["recipeInstructions"].filter((item) => item && typeof item === "object" && typeof (item as Record<string, unknown>).text === "string" && String((item as Record<string, unknown>).text).trim().length > 2);
-  if (!usableIngredients.length || !usableInstructions.length) throw new Error("Recipe source does not contain both usable ingredients and instructions");
+  if (!usableIngredients.length || !usableInstructions.length) throw new IncompleteRecipeError("Recipe source does not contain both usable ingredients and instructions");
 }
 
 export { MAX_MODEL_INPUT_CHARS };

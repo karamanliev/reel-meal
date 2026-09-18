@@ -97,8 +97,6 @@ export default function App() {
           setCustomImage={q.setCustomImage}
           useCustomImage={q.useCustomImage}
           setUseCustomImage={q.setUseCustomImage}
-          translate={q.translate}
-          setTranslate={q.setTranslate}
           extractTranscript={q.extractTranscript}
           setExtractTranscript={q.setExtractTranscript}
           autoImport={q.autoImport}

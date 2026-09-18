@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { JobQueue } from "./queue.js";
 
 const asset = { id: "source-00000000-0000-0000-0000-000000000000", fileName: "recipe.png", contentType: "image/png" as const, size: 12, previewUrl: "/api/assets/job/source" };
-function params(id: string) { return { id, source: { kind: "images" as const, assetIds: [asset.id] }, displayLabel: "1 image", sourceAssets: [asset], customImage: null, translate: false, extractTranscript: true, autoImport: false, customPrompt: "" }; }
+function params(id: string) { return { id, source: { kind: "images" as const, assetIds: [asset.id] }, displayLabel: "1 image", sourceAssets: [asset], customImage: null, extractTranscript: true, autoImport: false, customPrompt: "" }; }
 
 test("queue snapshots exclude server-only context and cleanup cancelled jobs", async () => {
   const queue = new JobQueue(); const cleaned: string[] = []; queue.setCleanupCallback((id) => { cleaned.push(id); }); queue.setProcessCallback(() => {});

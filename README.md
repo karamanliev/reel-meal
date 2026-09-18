@@ -32,7 +32,7 @@ Paste a URL or recipe, add images, review the generated recipe, then send it to 
 - tries video extraction first for URLs, then static Schema.org Recipe data and readable webpage content
 - accepts images from the picker, drag and drop, clipboard paste, and supported PWA share sheets
 - parses the result into a structured recipe with an LLM
-- optionally translates to English
+- keeps the source language by default; request a translation through the custom prompt
 - optionally imports the recipe directly into Mealie
 - lets you add a short custom parser prompt per run
 - supports a separate custom Mealie cover that is never sent to the recipe model

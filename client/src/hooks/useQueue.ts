@@ -11,7 +11,7 @@ function fromSnapshot(data: Record<string, unknown>): JobState {
   const steps = structuredClone(DEFAULT_STEPS); const raw = data.steps as Partial<Record<StepName, StepState>> | undefined;
   for (const key of Object.keys(DEFAULT_STEPS) as StepName[]) if (raw?.[key]) steps[key] = raw[key]!;
   const job: JobState = { id: String(data.id), sourceKind: data.sourceKind as JobState["sourceKind"], displayLabel: String(data.displayLabel ?? "Recipe"), resolvedSourceType: (data.resolvedSourceType as JobState["resolvedSourceType"]) ?? null,
-    translate: data.translate === true, extractTranscript: data.extractTranscript !== false, autoImport: data.autoImport !== false, customPrompt: String(data.customPrompt ?? ""), status: data.status as JobState["status"], addedAt: Number(data.addedAt), steps,
+    extractTranscript: data.extractTranscript !== false, autoImport: data.autoImport !== false, customPrompt: String(data.customPrompt ?? ""), status: data.status as JobState["status"], addedAt: Number(data.addedAt), steps,
     recipeTitle: data.recipeTitle as string | null, thumbnailUrl: data.thumbnailUrl as string | null, recipeUrl: data.recipeUrl as string | null, errorMessage: data.errorMessage as string | null,
     warnings: Array.isArray(data.warnings) ? data.warnings.filter((value): value is string => typeof value === "string") : [], sourceDetails: data.sourceDetails as SourceDetails | null,
     extractedContentDetails: data.extractedContentDetails as ExtractedContentDetails | null, parsingDetails: data.parsingDetails as ParsingDetails | null, hasRetainedContext: data.hasRetainedContext === true,
@@ -23,7 +23,7 @@ export function useQueue() {
   const [jobs, setJobs] = useState<Map<string, JobState>>(new Map()); const jobsRef = useRef(jobs);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null); const selectedRef = useRef(selectedJobId);
   const [inputText, setInputText] = useState(initialText); const [sourceImages, setSourceImages] = useState<File[]>([]); const [customImage, setCustomImage] = useState<File | null>(null);
-  const [translate, setTranslate] = useState(false); const [extractTranscript, setExtractTranscript] = useState(true); const [autoImport, setAutoImport] = useState(true);
+  const [extractTranscript, setExtractTranscript] = useState(true); const [autoImport, setAutoImport] = useState(true);
   const [useCustomPrompt, setUseCustomPrompt] = useState(false); const [customPrompt, setCustomPrompt] = useState(""); const [useCustomImage, setUseCustomImage] = useState(false);
   const [repromptingJobId, setRepromptingJobId] = useState<string | null>(null); const repromptRef = useRef<string | null>(null);
   useEffect(() => { jobsRef.current = jobs; }, [jobs]);
@@ -72,13 +72,13 @@ export function useQueue() {
 
   const addJob = useCallback(async () => {
     const text = inputText.trim(); const kind = sourceImages.length ? "images" : isExactHttpUrl(text) ? "url" : "text"; if (kind !== "images" && !text) return;
-    const id = crypto.randomUUID(); const optimistic = fromSnapshot({ id, sourceKind: kind, displayLabel: kind === "images" ? `${sourceImages.length} recipe images` : text.slice(0, 80), translate, extractTranscript, autoImport, customPrompt: useCustomPrompt ? customPrompt.trim() : "", status: "queued", addedAt: Date.now(), steps: DEFAULT_STEPS, warnings: [], hasRetainedContext: false });
+    const id = crypto.randomUUID(); const optimistic = fromSnapshot({ id, sourceKind: kind, displayLabel: kind === "images" ? `${sourceImages.length} recipe images` : text.slice(0, 80), extractTranscript, autoImport, customPrompt: useCustomPrompt ? customPrompt.trim() : "", status: "queued", addedAt: Date.now(), steps: DEFAULT_STEPS, warnings: [], hasRetainedContext: false });
     setJobs((previous) => new Map(previous).set(id, optimistic)); if (!selectedRef.current || ["done", "error", "cancelled"].includes(jobsRef.current.get(selectedRef.current)?.phase ?? "done")) setSelectedJobId(id);
-    const form = new FormData(); form.set("jobId", id); form.set("kind", kind); form.set("value", text); form.set("translate", String(translate)); form.set("extractTranscript", String(extractTranscript)); form.set("autoImport", String(autoImport)); form.set("customPrompt", useCustomPrompt ? customPrompt.trim() : "");
+    const form = new FormData(); form.set("jobId", id); form.set("kind", kind); form.set("value", text); form.set("extractTranscript", String(extractTranscript)); form.set("autoImport", String(autoImport)); form.set("customPrompt", useCustomPrompt ? customPrompt.trim() : "");
     for (const image of sourceImages) form.append("sourceImages", image); if (useCustomImage && customImage) form.set("customImage", customImage);
     try { const response = await fetch("/api/parse", { method: "POST", body: form }); const data = await response.json().catch(() => ({})) as { error?: string }; if (!response.ok) throw new Error(data.error || "Submission failed."); setInputText(""); setSourceImages([]); setCustomImage(null); }
     catch (error) { updateJob(id, { status: "error", errorMessage: error instanceof Error ? error.message : String(error) }); }
-  }, [inputText, sourceImages, customImage, translate, extractTranscript, autoImport, useCustomPrompt, customPrompt, useCustomImage, updateJob]);
+  }, [inputText, sourceImages, customImage, extractTranscript, autoImport, useCustomPrompt, customPrompt, useCustomImage, updateJob]);
   const handleSubmit = useCallback((event: React.FormEvent) => { event.preventDefault(); void addJob(); }, [addJob]);
   const cancelJob = useCallback(async (id: string) => { await fetch(`/api/queue/${id}`, { method: "DELETE" }); }, []);
   const removeJob = useCallback(async (id: string) => { await fetch(`/api/queue/${id}`, { method: "DELETE" }); removeLocal(id); }, [removeLocal]);
@@ -87,6 +87,6 @@ export function useQueue() {
   const toggleAutoImport = useCallback(async (id: string, value: boolean) => { updateJob(id, { autoImport: value }); await fetch(`/api/queue/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ autoImport: value }) }); if (value && jobsRef.current.get(id)?.parsingDetails && !jobsRef.current.get(id)?.recipeUrl) void handleManualImport(id); }, [handleManualImport, updateJob]);
   const reprompt = useCallback(async (id: string, prompt: string) => { setRepromptingJobId(id); repromptRef.current = id; const response = await fetch(`/api/reprompt/${id}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ customPrompt: prompt }) }); if (!response.ok) { const data = await response.json().catch(() => ({})) as { error?: string }; updateJob(id, { errorMessage: data.error ?? "Reprompt failed." }); setRepromptingJobId(null); repromptRef.current = null; } }, [updateJob]);
   const jobsArray = [...jobs.values()].sort((a, b) => a.addedAt - b.addedAt);
-  return { inputText, setInputText, sourceImages, setSourceImages, customImage, setCustomImage, useCustomImage, setUseCustomImage, translate, setTranslate, extractTranscript, setExtractTranscript, autoImport, setAutoImport, useCustomPrompt, setUseCustomPrompt, customPrompt, setCustomPrompt, customPromptMaxLength: CUSTOM_PROMPT_MAX_LENGTH,
+  return { inputText, setInputText, sourceImages, setSourceImages, customImage, setCustomImage, useCustomImage, setUseCustomImage, extractTranscript, setExtractTranscript, autoImport, setAutoImport, useCustomPrompt, setUseCustomPrompt, customPrompt, setCustomPrompt, customPromptMaxLength: CUSTOM_PROMPT_MAX_LENGTH,
     jobs: jobsArray, selectedJobId, selectJob: setSelectedJobId, hasMultipleJobs: jobsArray.length > 1, handleSubmit, addJob, cancelJob, removeJob, toggleDetails, handleManualImport, toggleAutoImport, reprompt, repromptingJobId, getSelectedJob: () => selectedJobId ? jobs.get(selectedJobId) ?? null : null };
 }

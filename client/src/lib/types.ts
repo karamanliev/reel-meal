@@ -9,7 +9,7 @@ export interface ExtractedContentDetails { content: string; source: "subtitles" 
 export interface ParsingDetails { parsedRecipe: unknown; importPayload: unknown; ingredientWarnings: string[] }
 export interface JobState {
   id: string; sourceKind: "url" | "text" | "images"; displayLabel: string; resolvedSourceType: ResolvedSourceType | null;
-  translate: boolean; extractTranscript: boolean; autoImport: boolean; customPrompt: string;
+  extractTranscript: boolean; autoImport: boolean; customPrompt: string;
   status: "queued" | "active" | "done" | "error" | "cancelled"; addedAt: number; steps: Record<StepName, StepState>;
   recipeTitle: string | null; thumbnailUrl: string | null; recipeUrl: string | null; errorMessage: string | null; warnings: string[];
   sourceDetails: SourceDetails | null; extractedContentDetails: ExtractedContentDetails | null; parsingDetails: ParsingDetails | null;
