@@ -5,6 +5,7 @@ import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { config } from "./lib/config.js";
 import { parseRouter } from "./routes/parse.js";
+import { assetManager } from "./lib/assets.js";
 
 const app = new Hono();
 
@@ -62,6 +63,8 @@ console.log(
     `  yt-dlp cookies: ${config.ytdlpCookiesFile ?? "not configured"}`,
   ].join("\n")
 );
+
+await assetManager.initialize();
 
 serve({
   fetch: app.fetch,

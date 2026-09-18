@@ -474,8 +474,7 @@ export async function uploadRecipeImage(
 
   if (!res.ok) {
     const text = await res.text().catch(() => "(no body)");
-    // Non-fatal: log but don't throw — recipe can still be imported without thumbnail
-    console.warn(`[mealie] Image upload failed for ${slug}: ${res.status} ${text}`);
+    throw new Error(`Mealie image upload failed: ${res.status} ${text}`);
   }
 }
 
@@ -522,25 +521,30 @@ export async function updateRecipe(
 export interface ImportResult {
   slug: string;
   recipeUrl: string;
+  warnings: string[];
 }
 
 export async function importRecipe(params: {
   preparedImport: PreparedRecipeImport;
-  thumbnailFilePath?: string;
+  imageFilePaths?: string[];
 }): Promise<ImportResult> {
-  const { preparedImport, thumbnailFilePath } = params;
+  const { preparedImport, imageFilePaths = [] } = params;
+  const warnings: string[] = [];
 
   // 1. Create shell
   const slug = await createRecipeShell(preparedImport.payload.name);
   console.log(`[mealie] Created recipe shell: ${slug}`);
 
   // 2. Upload thumbnail (non-fatal on failure)
-  if (thumbnailFilePath) {
+  for (const [index, imageFilePath] of imageFilePaths.entries()) {
     try {
-      await uploadRecipeImage(slug, thumbnailFilePath);
+      await uploadRecipeImage(slug, imageFilePath);
       console.log(`[mealie] Uploaded thumbnail for: ${slug}`);
+      break;
     } catch (err) {
-      console.warn(`[mealie] Thumbnail upload skipped: ${err instanceof Error ? err.message : err}`);
+      const message = `${index === 0 ? "Preferred" : "Fallback"} image failed: ${err instanceof Error ? err.message : err}`;
+      warnings.push(message);
+      console.warn(`[mealie] ${message}`);
     }
   }
 
@@ -551,5 +555,6 @@ export async function importRecipe(params: {
   return {
     slug: finalSlug,
     recipeUrl: await buildRecipeUrl(finalSlug),
+    warnings,
   };
 }

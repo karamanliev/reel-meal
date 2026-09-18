@@ -330,32 +330,6 @@ export async function downloadAudio(url: string): Promise<AudioResult> {
 }
 
 /**
- * Download thumbnail image to a temp file.
- * Returns the path and a cleanup function.
- */
-export async function downloadThumbnail(
-  thumbnailUrl: string
-): Promise<{ filePath: string; cleanup: () => Promise<void> }> {
-  const { dir: workDir, cleanup } = await createTempDir("recipe-thumb-");
-
-  try {
-    const response = await fetch(thumbnailUrl);
-    if (!response.ok) {
-      throw new Error(`Failed to download thumbnail: ${response.status} ${response.statusText}`);
-    }
-
-    const buffer = await response.arrayBuffer();
-    const filePath = join(workDir, "thumbnail.jpg");
-    await writeFile(filePath, Buffer.from(buffer));
-
-    return { filePath, cleanup };
-  } catch (err) {
-    await cleanup().catch(() => {});
-    throw err;
-  }
-}
-
-/**
  * Parse a WebVTT subtitle file into plain text.
  * Removes timestamps, cue settings, and duplicate lines.
  */

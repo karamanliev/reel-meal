@@ -7,12 +7,14 @@
   "background_color": "#fffdf9",
   "theme_color": "#ffa8a8",
   "share_target": {
-    "action": "/",
-    "method": "GET",
+    "action": "/share-target",
+    "method": "POST",
+    "enctype": "multipart/form-data",
     "params": {
-      "title": "title",
-      "text": "text",
-      "url": "url"
+      "title": "share-title",
+      "text": "share-text",
+      "url": "share-url",
+      "files": [{ "name": "share-images", "accept": ["image/jpeg", "image/png", "image/webp", "image/gif"] }]
     }
   },
   "icons": [

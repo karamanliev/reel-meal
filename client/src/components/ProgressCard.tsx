@@ -3,14 +3,15 @@ import type {
   StepName,
   StepState,
   Phase,
-  MetadataDetails as MetadataDetailsType,
-  TranscriptDetails as TranscriptDetailsType,
+  SourceDetails as SourceDetailsType,
+  ExtractedContentDetails as ExtractedContentDetailsType,
+  ResolvedSourceType,
   ParsingDetails as ParsingDetailsType,
   ParsingDiff,
   RecipeFact,
   NutritionEntry,
 } from "../lib/types";
-import { STEPS } from "../lib/types";
+import { getSteps } from "../lib/types";
 import { StatusIcon } from "./StatusIcon";
 import { MetadataDetails } from "./MetadataDetails";
 import { TranscriptDetails } from "./TranscriptDetails";
@@ -33,9 +34,11 @@ interface ProgressCardProps {
   recipeUrl: string | null;
   errorMessage: string | null;
   manualImportError: string | null;
-  metadataDetails: MetadataDetailsType | null;
-  transcriptDetails: TranscriptDetailsType | null;
+  sourceType: ResolvedSourceType | null;
+  sourceDetails: SourceDetailsType | null;
+  extractedContentDetails: ExtractedContentDetailsType | null;
   parsingDetails: ParsingDetailsType | null;
+  warnings: string[];
   expandedDetails: Partial<Record<StepName, boolean>>;
   parsingDiff: ParsingDiff | null;
   recipeFacts: RecipeFact[];
@@ -78,12 +81,9 @@ const STEP_ACCENT: Record<string, { surface: string; chip: string }> = {
 };
 
 export function ProgressCard(props: ProgressCardProps) {
+  const steps = getSteps(props.sourceType);
   const [repromptValue, setRepromptValue] = React.useState(props.customPrompt);
   const prevLoadingStepRef = React.useRef<StepName | null>(null);
-
-  React.useEffect(() => {
-    setRepromptValue(props.customPrompt);
-  }, [props.customPrompt]);
 
   React.useEffect(() => {
     const active = document.activeElement;
@@ -178,20 +178,19 @@ export function ProgressCard(props: ProgressCardProps) {
               </h2>
             )}
             <p className="neo-note mt-3">
-              ReelMeal has extracted the title and thumbnail for the selected
-              clip.
+              ReelMeal prepared this source and selected the best available recipe image.
             </p>
           </div>
         </div>
       )}
 
-      {STEPS.filter((s) => s.id !== "importing").map((step) => {
+      {steps.filter((s) => s.id !== "importing").map((step) => {
         const state = props.steps[step.id];
         const accent = STEP_ACCENT[state.status];
         const hasDetails =
-          (step.id === "metadata" && Boolean(props.metadataDetails)) ||
-          (step.id === "transcript" && Boolean(props.transcriptDetails)) ||
-          (step.id === "parsing" && Boolean(props.parsingDetails));
+          (step.id === "source" && Boolean(props.sourceDetails)) ||
+          (step.id === "extraction" && Boolean(props.extractedContentDetails)) ||
+          (step.id === "generation" && Boolean(props.parsingDetails));
         const detailsOpen = Boolean(props.expandedDetails[step.id]);
 
         return (
@@ -243,15 +242,15 @@ export function ProgressCard(props: ProgressCardProps) {
               )}
             </div>
 
-            {step.id === "metadata" && detailsOpen && props.metadataDetails && (
-              <MetadataDetails details={props.metadataDetails} />
+            {step.id === "source" && detailsOpen && props.sourceDetails && (
+              <MetadataDetails details={props.sourceDetails} />
             )}
-            {step.id === "transcript" &&
+            {step.id === "extraction" &&
               detailsOpen &&
-              props.transcriptDetails && (
-                <TranscriptDetails details={props.transcriptDetails} />
+              props.extractedContentDetails && (
+                <TranscriptDetails details={props.extractedContentDetails} />
               )}
-            {step.id === "parsing" && detailsOpen && props.parsingDetails && (
+            {step.id === "generation" && detailsOpen && props.parsingDetails && (
               <ParsingDetails
                 details={props.parsingDetails}
                 parsingDiff={props.parsingDiff}
@@ -305,7 +304,7 @@ export function ProgressCard(props: ProgressCardProps) {
       )}
 
       {(() => {
-        const step = STEPS.find((s) => s.id === "importing");
+        const step = steps.find((s) => s.id === "importing");
         if (!step) return null;
         const state = props.steps.importing;
         const accent = STEP_ACCENT[state.status];
@@ -394,6 +393,7 @@ export function ProgressCard(props: ProgressCardProps) {
               <p className="mt-3 font-display text-[1.6rem] leading-none font-800 tracking-[-0.05em] text-ink sm:text-[1.9rem]">
                 Recipe imported successfully.
               </p>
+              {props.warnings.length > 0 && <ul className="mt-3 text-sm font-600">{props.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>}
             </div>
 
             <a

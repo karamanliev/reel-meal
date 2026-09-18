@@ -1,688 +1,92 @@
-import { useState, useRef, useCallback, useEffect } from "react";
-import type {
-  StepName,
-  StepState,
-  JobState,
-  MetadataDetails,
-  TranscriptDetails,
-  ParsingDetails,
-  StepEventData,
-} from "../lib/types";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { JobState, ParsingDetails, SourceDetails, ExtractedContentDetails, StepEventData, StepName, StepState } from "../lib/types";
 import { DEFAULT_STEPS, derivePhase } from "../lib/types";
+import { isExactHttpUrl } from "../lib/input";
+import { consumeSharedPayload } from "../lib/share-inbox";
 
 const CUSTOM_PROMPT_MAX_LENGTH = 400;
 
-function getInitialUrl(): string {
-  if (typeof window === "undefined") return "";
-  return new URLSearchParams(window.location.search).get("url")?.trim() ?? "";
-}
-
-function createJobFromSnapshot(data: Record<string, unknown>): JobState {
-  const steps: Record<StepName, StepState> = { ...DEFAULT_STEPS };
-  const rawSteps = data.steps as Record<string, unknown> | undefined;
-  if (rawSteps) {
-    for (const key of Object.keys(rawSteps)) {
-      if (key in DEFAULT_STEPS) {
-        const s = rawSteps[key] as Record<string, unknown>;
-        steps[key as StepName] = {
-          status: (s.status as StepState["status"]) || "idle",
-          message: (s.message as string) || "",
-        };
-      }
-    }
-  }
-
-  const job: JobState = {
-    id: data.id as string,
-    url: data.url as string,
-    translate: data.translate as boolean,
-    extractTranscript: data.extractTranscript as boolean,
-    autoImport: data.autoImport as boolean,
-    customPrompt: (data.customPrompt as string) || "",
-    status: data.status as JobState["status"],
-    addedAt: data.addedAt as number,
-    steps,
-    recipeTitle: (data.recipeTitle as string) || null,
-    thumbnailUrl: (data.thumbnailUrl as string) || null,
-    recipeUrl: (data.recipeUrl as string) || null,
-    errorMessage: (data.errorMessage as string) || null,
-    metadataDetails: data.metadataDetails as MetadataDetails | null,
-    transcriptDetails: data.transcriptDetails as TranscriptDetails | null,
-    parsingDetails: data.parsingDetails as ParsingDetails | null,
-    position: (data.position as number) || 0,
-    totalInQueue: (data.totalInQueue as number) || 0,
-    phase: "loading",
-    manualImportError: null,
-    expandedDetails: {},
-  };
-
-  job.phase = derivePhase(job);
-  return job;
+function initialText(): string { if (typeof window === "undefined") return ""; return new URLSearchParams(location.search).get("url")?.trim() ?? ""; }
+function fromSnapshot(data: Record<string, unknown>): JobState {
+  const steps = structuredClone(DEFAULT_STEPS); const raw = data.steps as Partial<Record<StepName, StepState>> | undefined;
+  for (const key of Object.keys(DEFAULT_STEPS) as StepName[]) if (raw?.[key]) steps[key] = raw[key]!;
+  const job: JobState = { id: String(data.id), sourceKind: data.sourceKind as JobState["sourceKind"], displayLabel: String(data.displayLabel ?? "Recipe"), resolvedSourceType: (data.resolvedSourceType as JobState["resolvedSourceType"]) ?? null,
+    translate: data.translate === true, extractTranscript: data.extractTranscript !== false, autoImport: data.autoImport !== false, customPrompt: String(data.customPrompt ?? ""), status: data.status as JobState["status"], addedAt: Number(data.addedAt), steps,
+    recipeTitle: data.recipeTitle as string | null, thumbnailUrl: data.thumbnailUrl as string | null, recipeUrl: data.recipeUrl as string | null, errorMessage: data.errorMessage as string | null,
+    warnings: Array.isArray(data.warnings) ? data.warnings.filter((value): value is string => typeof value === "string") : [], sourceDetails: data.sourceDetails as SourceDetails | null,
+    extractedContentDetails: data.extractedContentDetails as ExtractedContentDetails | null, parsingDetails: data.parsingDetails as ParsingDetails | null, hasRetainedContext: data.hasRetainedContext === true,
+    position: Number(data.position ?? 0), totalInQueue: Number(data.totalInQueue ?? 0), phase: "loading", manualImportError: null, expandedDetails: {} };
+  job.phase = derivePhase(job); return job;
 }
 
 export function useQueue() {
-  const [jobs, setJobs] = useState<Map<string, JobState>>(new Map());
-  const jobsRef = useRef<Map<string, JobState>>(jobs);
-  jobsRef.current = jobs;
-  const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
-  const selectedJobIdRef = useRef<string | null>(selectedJobId);
-  selectedJobIdRef.current = selectedJobId;
-  const eventSourceRef = useRef<EventSource | null>(null);
-  const eventBufferRef = useRef<{ event: string; data: string }[]>([]);
-  const snapshotProcessedRef = useRef(false);
-  const repromptingJobIdRef = useRef<string | null>(null);
+  const [jobs, setJobs] = useState<Map<string, JobState>>(new Map()); const jobsRef = useRef(jobs);
+  const [selectedJobId, setSelectedJobId] = useState<string | null>(null); const selectedRef = useRef(selectedJobId);
+  const [inputText, setInputText] = useState(initialText); const [sourceImages, setSourceImages] = useState<File[]>([]); const [customImage, setCustomImage] = useState<File | null>(null);
+  const [translate, setTranslate] = useState(false); const [extractTranscript, setExtractTranscript] = useState(true); const [autoImport, setAutoImport] = useState(true);
+  const [useCustomPrompt, setUseCustomPrompt] = useState(false); const [customPrompt, setCustomPrompt] = useState(""); const [useCustomImage, setUseCustomImage] = useState(false);
+  const [repromptingJobId, setRepromptingJobId] = useState<string | null>(null); const repromptRef = useRef<string | null>(null);
+  useEffect(() => { jobsRef.current = jobs; }, [jobs]);
+  useEffect(() => { selectedRef.current = selectedJobId; }, [selectedJobId]);
+  const updateJob = useCallback((id: string, patch: Partial<JobState>) => setJobs((previous) => { const current = previous.get(id); if (!current) return previous; const next = new Map(previous); const updated = { ...current, ...patch }; updated.phase = derivePhase(updated); next.set(id, updated); return next; }), []);
+  const updateStep = useCallback((id: string, step: StepName, patch: Partial<StepState>) => setJobs((previous) => { const current = previous.get(id); if (!current) return previous; const next = new Map(previous); const updated = { ...current, steps: { ...current.steps, [step]: { ...current.steps[step], ...patch } } }; updated.phase = derivePhase(updated); next.set(id, updated); return next; }), []);
+  const removeLocal = useCallback((id: string) => { setJobs((previous) => { const next = new Map(previous); next.delete(id); return next; }); setSelectedJobId((current) => current === id ? null : current); }, []);
+  const refresh = useCallback(async () => { const response = await fetch("/api/queue"); if (!response.ok) return; const list = await response.json() as Record<string, unknown>[]; const map = new Map(list.map((item) => { const job = fromSnapshot(item); return [job.id, job] })); setJobs(map); setSelectedJobId((current) => current ?? [...map.values()].at(-1)?.id ?? null); }, []);
 
-const [url, setUrl] = useState(getInitialUrl);
-  const [translate, setTranslate] = useState(false);
-  const [extractTranscript, setExtractTranscript] = useState(true);
-  const [autoImport, setAutoImport] = useState(true);
-  const [useCustomPrompt, setUseCustomPrompt] = useState(false);
-  const [customPrompt, setCustomPrompt] = useState("");
-  const [repromptingJobId, setRepromptingJobId] = useState<string | null>(null);
-
-  const updateJob = useCallback(
-    (jobId: string, patch: Partial<JobState>) => {
-      setJobs((prev) => {
-        const next = new Map(prev);
-        const job = next.get(jobId);
-        if (!job) return prev;
-        const updated = { ...job, ...patch };
-        updated.phase = derivePhase(updated);
-        next.set(jobId, updated);
-        return next;
-      });
-    },
-    [],
-  );
-
-  const updateJobStep = useCallback(
-    (jobId: string, stepName: StepName, patch: Partial<StepState>) => {
-      setJobs((prev) => {
-        const next = new Map(prev);
-        const job = next.get(jobId);
-        if (!job) return prev;
-        const updated = {
-          ...job,
-          steps: { ...job.steps, [stepName]: { ...job.steps[stepName], ...patch } },
-        };
-        updated.phase = derivePhase(updated);
-        next.set(jobId, updated);
-        return next;
-      });
-    },
-    [],
-  );
-
-  const removeJob = useCallback((jobId: string) => {
-    setJobs((prev) => {
-      const next = new Map(prev);
-      next.delete(jobId);
-      return next;
-    });
-    setSelectedJobId((prev) => (prev === jobId ? null : prev));
-  }, []);
-
-  const processEvent = useCallback(
-    (event: string, dataStr: string) => {
-      if (event === "job-added") {
-        const data = JSON.parse(dataStr) as Record<string, unknown>;
-        const job = createJobFromSnapshot(data);
-        setJobs((prev) => {
-          const next = new Map(prev);
-          if (!next.has(job.id)) {
-            next.set(job.id, job);
-          }
-          return next;
-        });
-        return;
-      }
-
-      if (event === "job-start") {
-        const { jobId } = JSON.parse(dataStr) as { jobId: string };
-        updateJob(jobId, { status: "active" });
-        return;
-      }
-
-      if (event === "job-position") {
-        const { jobId, position, totalInQueue } = JSON.parse(dataStr) as {
-          jobId: string;
-          position: number;
-          totalInQueue: number;
-        };
-        updateJob(jobId, { position, totalInQueue });
-        return;
-      }
-
-      if (event === "step") {
-        const msg = JSON.parse(dataStr) as StepEventData;
-        const { jobId, step, status, message, data, error } = msg;
-
-        if (status === "idle") {
-          updateJobStep(jobId, step, { status: "idle", message: message ?? "" });
-          return;
-        }
-
-        if (status === "loading") {
-          updateJobStep(jobId, step, { status: "loading", message: message ?? "" });
-          return;
-        }
-
-        if (status === "done") {
-          updateJobStep(jobId, step, { status: "done", message: message ?? "" });
-
-          const jobPatch: Partial<JobState> = {};
-
-          if (step === "metadata" && data) {
-            if (data.title) jobPatch.recipeTitle = data.title;
-            if (data.thumbnailUrl) jobPatch.thumbnailUrl = data.thumbnailUrl;
-            if (data.title) {
-              jobPatch.metadataDetails = {
-                title: data.title,
-                uploader: data.uploader,
-                duration: data.duration,
-                description: data.description,
-                webpageUrl: data.webpageUrl,
-                thumbnailSourceUrl: data.thumbnailSourceUrl,
-                hasSubtitles: data.hasSubtitles,
-                subtitleLanguage: data.subtitleLanguage,
-              } satisfies MetadataDetails;
-            }
-          }
-
-          if (
-            step === "transcript" &&
-            typeof data?.transcript === "string" &&
-            (data.source === "subtitles" || data.source === "audio")
-          ) {
-            jobPatch.transcriptDetails = {
-              transcript: data.transcript,
-              source: data.source,
-            } satisfies TranscriptDetails;
-          }
-
-          if (
-            step === "parsing" &&
-            data?.parsedRecipe !== undefined &&
-            data?.importPayload !== undefined
-          ) {
-            jobPatch.parsingDetails = {
-              parsedRecipe: data.parsedRecipe,
-              importPayload: data.importPayload,
-              ingredientWarnings: Array.isArray(data.ingredientWarnings)
-                ? data.ingredientWarnings.filter(
-                    (warning): warning is string => typeof warning === "string",
-                  )
-                : [],
-            } satisfies ParsingDetails;
-          }
-
-          if (step === "importing" && data?.recipeUrl) {
-            jobPatch.recipeUrl = data.recipeUrl;
-          }
-
-          if (Object.keys(jobPatch).length > 0) {
-            updateJob(jobId, jobPatch);
-          }
-          return;
-        }
-
-        if (status === "error") {
-          const failedStep = step ?? "metadata";
-          updateJobStep(jobId, failedStep, {
-            status: "error",
-            message: error ?? "An unexpected error occurred.",
-          });
-          updateJob(jobId, {
-            errorMessage: error ?? "An unexpected error occurred.",
-          });
-          return;
-        }
-
-        return;
-      }
-
-      if (event === "job-done") {
-        const { jobId, recipeUrl } = JSON.parse(dataStr) as {
-          jobId: string;
-          recipeUrl: string;
-        };
-        updateJob(jobId, { status: "done", recipeUrl });
-        if (repromptingJobIdRef.current === jobId) {
-          setRepromptingJobId(null);
-          repromptingJobIdRef.current = null;
-        }
-        return;
-      }
-
-      if (event === "job-review") {
-        const { jobId } = JSON.parse(dataStr) as { jobId: string };
-        updateJob(jobId, { status: "done" });
-        if (repromptingJobIdRef.current === jobId) {
-          setRepromptingJobId(null);
-          repromptingJobIdRef.current = null;
-        }
-        return;
-      }
-
-      if (event === "job-error") {
-        const { jobId, error } = JSON.parse(dataStr) as { jobId: string; error: string };
-        updateJob(jobId, { status: "error", errorMessage: error ?? "An unexpected error occurred." });
-        if (repromptingJobIdRef.current === jobId) {
-          setRepromptingJobId(null);
-          repromptingJobIdRef.current = null;
-        }
-        return;
-      }
-
-      if (event === "job-cancelled") {
-        const { jobId } = JSON.parse(dataStr) as { jobId: string };
-        updateJob(jobId, { status: "cancelled", errorMessage: "Job cancelled." });
-        return;
-      }
-
-      if (event === "job-removed") {
-        const { jobId } = JSON.parse(dataStr) as { jobId: string };
-        removeJob(jobId);
-        return;
-      }
-
-      if (event === "job-update") {
-        const jobId = JSON.parse(dataStr) as string;
-        fetch("/api/queue")
-          .then((r) => r.json())
-          .then((snapshot) => {
-            const items = snapshot as Record<string, unknown>[];
-            const updated = items.find((item) => item.id === jobId);
-            if (updated) {
-              const freshJob = createJobFromSnapshot(updated);
-              setJobs((prev) => {
-                const next = new Map(prev);
-                next.set(jobId, freshJob);
-                return next;
-              });
-            }
-          })
-          .catch(() => {});
-        return;
-      }
-    },
-    [updateJob, updateJobStep, removeJob],
-  );
-
-  useEffect(() => {
-    let cancelled = false;
-
-    fetch("/api/queue")
-      .then((r) => r.json())
-      .then((snapshot) => {
-        if (cancelled) return;
-        const jobMap = new Map<string, JobState>();
-        for (const item of snapshot as Record<string, unknown>[]) {
-          const job = createJobFromSnapshot(item);
-          jobMap.set(job.id, job);
-        }
-        setJobs(jobMap);
-        snapshotProcessedRef.current = true;
-
-        setSelectedJobId((prev) => {
-          if (prev) return prev;
-          const jobs = Array.from(jobMap.values()).sort((a, b) => a.addedAt - b.addedAt);
-          const activeJob = jobs.find((j) => j.status === "active" || j.status === "queued");
-          if (activeJob) return activeJob.id;
-          const lastJob = jobs[jobs.length - 1];
-          return lastJob?.id ?? null;
-        });
-
-        for (const buffered of eventBufferRef.current) {
-          processEvent(buffered.event, buffered.data);
-        }
-        eventBufferRef.current = [];
-      })
-      .catch(() => {
-        snapshotProcessedRef.current = true;
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [processEvent]);
-
-  useEffect(() => {
-    const es = new EventSource("/api/queue/stream");
-    eventSourceRef.current = es;
-
-    const eventNames = [
-      "job-added",
-      "job-start",
-      "job-position",
-      "step",
-      "job-done",
-      "job-review",
-      "job-error",
-      "job-cancelled",
-      "job-removed",
-      "job-update",
-    ];
-
-    for (const name of eventNames) {
-      es.addEventListener(name, (e: MessageEvent) => {
-        const data = (e as MessageEvent).data as string;
-        if (snapshotProcessedRef.current) {
-          processEvent(name, data);
-        } else {
-          eventBufferRef.current.push({ event: name, data });
-        }
-      });
+  const processEvent = useCallback((event: string, raw: string) => {
+    const data = JSON.parse(raw) as Record<string, unknown>;
+    if (event === "job-added") { const job = fromSnapshot(data); setJobs((previous) => new Map(previous).set(job.id, previous.get(job.id) ?? job)); return; }
+    const id = String(data.jobId ?? "");
+    if (event === "job-start") updateJob(id, { status: "active" });
+    else if (event === "job-position") updateJob(id, { position: Number(data.position), totalInQueue: Number(data.totalInQueue) });
+    else if (event === "job-cancelled") updateJob(id, { status: "cancelled", errorMessage: "Job cancelled." });
+    else if (event === "job-removed") removeLocal(id);
+    else if (event === "job-done") { updateJob(id, { status: "done", recipeUrl: String(data.recipeUrl ?? "") }); setRepromptingJobId(null); repromptRef.current = null; }
+    else if (event === "job-review") { updateJob(id, { status: "done" }); setRepromptingJobId(null); repromptRef.current = null; }
+    else if (event === "job-error") { updateJob(id, { status: "error", errorMessage: String(data.error ?? "Processing failed.") }); setRepromptingJobId(null); repromptRef.current = null; }
+    else if (event === "job-update") void refresh();
+    else if (event === "step") {
+      const message = data as unknown as StepEventData; updateStep(message.jobId, message.step, { status: message.status, message: message.message ?? message.error ?? "" });
+      const detail = message.data ?? {}; const patch: Partial<JobState> = {};
+      if (detail.resolvedSourceType) patch.resolvedSourceType = detail.resolvedSourceType as JobState["resolvedSourceType"];
+      if (detail.sourceDetails) patch.sourceDetails = detail.sourceDetails as SourceDetails;
+      if (detail.extractedContentDetails) patch.extractedContentDetails = detail.extractedContentDetails as ExtractedContentDetails;
+      if (detail.parsingDetails) patch.parsingDetails = detail.parsingDetails as ParsingDetails;
+      if (detail.recipeTitle) patch.recipeTitle = String(detail.recipeTitle); if (detail.thumbnailUrl) patch.thumbnailUrl = String(detail.thumbnailUrl); if (detail.recipeUrl) patch.recipeUrl = String(detail.recipeUrl);
+      if (Array.isArray(detail.warnings)) patch.warnings = detail.warnings.filter((value): value is string => typeof value === "string");
+      if (message.error) patch.errorMessage = message.error; if (Object.keys(patch).length) updateJob(message.jobId, patch);
     }
+  }, [refresh, removeLocal, updateJob, updateStep]);
 
-    es.onerror = () => {
-      // Reconnect is handled automatically by EventSource
-    };
+  useEffect(() => {
+    let active = true;
+    fetch("/api/queue").then((response) => response.ok ? response.json() : []).then((list: Record<string, unknown>[]) => {
+      if (!active) return;
+      const map = new Map(list.map((item) => { const job = fromSnapshot(item); return [job.id, job] }));
+      setJobs(map); setSelectedJobId((current) => current ?? [...map.values()].at(-1)?.id ?? null);
+    }).catch(() => {});
+    return () => { active = false; };
+  }, []);
+  useEffect(() => { const stream = new EventSource("/api/queue/stream"); const names = ["job-added", "job-start", "job-position", "step", "job-done", "job-review", "job-error", "job-cancelled", "job-removed", "job-update"]; const listeners = names.map((name) => { const listener = (event: Event) => processEvent(name, (event as MessageEvent).data); stream.addEventListener(name, listener); return [name, listener] as const; }); return () => { for (const [name, listener] of listeners) stream.removeEventListener(name, listener); stream.close(); }; }, [processEvent]);
+  useEffect(() => { void consumeSharedPayload().then((shared) => { if (!shared) return; if (shared.files.length) { setInputText(""); setSourceImages(shared.files); } else setInputText(shared.url || shared.text); }); }, []);
 
-    return () => {
-      es.close();
-      eventSourceRef.current = null;
-    };
-  }, [processEvent]);
-
-  const cancelJob = useCallback(
-    async (jobId: string) => {
-      try {
-        const res = await fetch(`/api/queue/${jobId}`, { method: "DELETE" });
-        if (!res.ok) {
-          const data = (await res.json().catch(() => ({}))) as { error?: string };
-          updateJob(jobId, {
-            status: "error",
-            errorMessage: data.error || "Could not cancel job.",
-          });
-        }
-      } catch {
-        updateJob(jobId, { status: "cancelled", errorMessage: "Job cancelled." });
-      }
-    },
-    [updateJob],
-  );
-
-  const removeJobServer = useCallback(
-    async (jobId: string) => {
-      try {
-        await fetch(`/api/queue/${jobId}`, { method: "DELETE" });
-      } catch {
-        // Ignore error, remove locally anyway
-      }
-      removeJob(jobId);
-    },
-    [removeJob],
-  );
-
-  const addJob = useCallback(
-    (videoUrl: string) => {
-      const jobId = crypto.randomUUID();
-
-      const optimisticJob: JobState = {
-        id: jobId,
-        url: videoUrl,
-        translate,
-        extractTranscript,
-        autoImport,
-        customPrompt: useCustomPrompt ? customPrompt.trim() : "",
-        status: "queued",
-        addedAt: Date.now(),
-        steps: { ...DEFAULT_STEPS },
-        recipeTitle: null,
-        thumbnailUrl: null,
-        recipeUrl: null,
-        errorMessage: null,
-        metadataDetails: null,
-        transcriptDetails: null,
-        parsingDetails: null,
-        position: 0,
-        totalInQueue: 0,
-        phase: "queued",
-        manualImportError: null,
-        expandedDetails: {},
-      };
-
-      setJobs((prev) => {
-        const next = new Map(prev);
-        next.set(jobId, optimisticJob);
-        return next;
-      });
-
-      const currentJob = selectedJobIdRef.current
-        ? jobsRef.current.get(selectedJobIdRef.current)
-        : undefined;
-      const isFinished = currentJob
-        ? currentJob.phase === "done" || currentJob.phase === "error" || currentJob.phase === "cancelled"
-        : true;
-      if (isFinished) {
-        setSelectedJobId(jobId);
-      }
-
-      fetch("/api/parse", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          url: videoUrl,
-          translate,
-          extractTranscript,
-          autoImport,
-          customPrompt: useCustomPrompt ? customPrompt.trim() : "",
-          jobId,
-        }),
-      }).catch(() => {
-        updateJob(jobId, {
-          status: "error",
-          errorMessage: "Failed to submit job. Please try again.",
-        });
-      });
-
-      setUrl("");
-    },
-    [translate, extractTranscript, autoImport, useCustomPrompt, customPrompt, updateJob],
-  );
-
-  const toggleDetails = useCallback(
-    (jobId: string, step: StepName) => {
-      setJobs((prev) => {
-        const next = new Map(prev);
-        const job = next.get(jobId);
-        if (!job) return prev;
-        next.set(jobId, {
-          ...job,
-          expandedDetails: { ...job.expandedDetails, [step]: !job.expandedDetails[step] },
-        });
-        return next;
-      });
-    },
-    [],
-  );
-
-  const handleManualImport = useCallback(
-    async (jobId: string) => {
-      const job = jobsRef.current.get(jobId);
-      const importPayload = job?.parsingDetails?.importPayload ?? null;
-      const ingredientWarnings = job?.parsingDetails?.ingredientWarnings ?? null;
-      const thumbnailUrl = job?.metadataDetails?.thumbnailSourceUrl;
-
-      if (!importPayload) return;
-
-      updateJob(jobId, { manualImportError: null });
-      updateJobStep(jobId, "importing", {
-        status: "loading",
-        message: "Importing to Mealie...",
-      });
-
-      try {
-        const response = await fetch("/api/import", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            jobId,
-            importPayload,
-            ingredientWarnings,
-            thumbnailUrl,
-          }),
-        });
-
-        const data = (await response.json().catch(() => ({}))) as {
-          error?: string;
-          recipeUrl?: string;
-        };
-
-        if (!response.ok || !data.recipeUrl) {
-          throw new Error(data.error || "Manual import failed.");
-        }
-
-        updateJob(jobId, { recipeUrl: data.recipeUrl });
-        updateJobStep(jobId, "importing", {
-          status: "done",
-          message: "Recipe imported successfully!",
-        });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        updateJob(jobId, { manualImportError: message });
-        updateJobStep(jobId, "importing", { status: "error", message });
-      }
-    },
-    [updateJob, updateJobStep],
-  );
-
-  const toggleAutoImport = useCallback(
-    async (jobId: string, value: boolean) => {
-      const job = jobsRef.current.get(jobId);
-      const shouldImport = value && job?.parsingDetails && !job?.recipeUrl;
-
-      updateJob(jobId, { autoImport: value });
-      try {
-        await fetch(`/api/queue/${jobId}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ autoImport: value }),
-        });
-      } catch {
-        updateJob(jobId, { autoImport: !value });
-        return;
-      }
-      if (shouldImport) {
-        handleManualImport(jobId);
-      }
-    },
-    [updateJob, handleManualImport],
-  );
-
-  const reprompt = useCallback(
-    async (jobId: string, customPrompt: string) => {
-      const job = jobsRef.current.get(jobId);
-      if (!job) return;
-
-      const prevParsingStep = { ...job.steps.parsing };
-      const prevImportingStep = { ...job.steps.importing };
-      const prevCustomPrompt = job.customPrompt;
-      const prevParsingDetails = job.parsingDetails;
-      const prevRecipeUrl = job.recipeUrl;
-      const prevManualImportError = job.manualImportError;
-
-      setRepromptingJobId(jobId);
-      repromptingJobIdRef.current = jobId;
-      updateJobStep(jobId, "parsing", {
-        status: "loading",
-        message: "Re-generating recipe with AI...",
-      });
-      updateJobStep(jobId, "importing", { status: "idle", message: "" });
-      updateJob(jobId, {
-        customPrompt,
-        parsingDetails: null,
-        recipeUrl: null,
-        errorMessage: null,
-        manualImportError: null,
-      });
-
-      try {
-        const res = await fetch(`/api/reprompt/${jobId}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ customPrompt }),
-        });
-
-        if (!res.ok) {
-          const data = (await res.json().catch(() => ({}))) as { error?: string };
-          updateJobStep(jobId, "parsing", prevParsingStep);
-          updateJobStep(jobId, "importing", prevImportingStep);
-          updateJob(jobId, {
-            customPrompt: prevCustomPrompt,
-            parsingDetails: prevParsingDetails,
-            recipeUrl: prevRecipeUrl,
-            errorMessage: data.error || "Reprompt failed.",
-            manualImportError: prevManualImportError,
-          });
-          setRepromptingJobId(null);
-          repromptingJobIdRef.current = null;
-        }
-      } catch {
-        updateJobStep(jobId, "parsing", prevParsingStep);
-        updateJobStep(jobId, "importing", prevImportingStep);
-        updateJob(jobId, {
-          customPrompt: prevCustomPrompt,
-          parsingDetails: prevParsingDetails,
-          recipeUrl: prevRecipeUrl,
-          errorMessage: "Failed to reprompt. Please try again.",
-          manualImportError: prevManualImportError,
-        });
-        setRepromptingJobId(null);
-          repromptingJobIdRef.current = null;
-      }
-    },
-    [updateJob, updateJobStep],
-  );
-
-  const handleSubmit = useCallback(
-    (e: React.FormEvent) => {
-      e.preventDefault();
-      const trimmed = url.trim();
-      if (!trimmed) return;
-      addJob(trimmed);
-    },
-    [url, addJob],
-  );
-
-  const jobsArray = Array.from(jobs.values()).sort((a, b) => a.addedAt - b.addedAt);
-  const hasMultipleJobs = jobsArray.length > 1;
-
-  const getSelectedJob = useCallback(() => {
-    if (!selectedJobId) return null;
-    return jobs.get(selectedJobId) ?? null;
-  }, [jobs, selectedJobId]);
-
-  return {
-    url,
-    setUrl,
-    translate,
-    setTranslate,
-    extractTranscript,
-    setExtractTranscript,
-    autoImport,
-    setAutoImport,
-    useCustomPrompt,
-    setUseCustomPrompt,
-    customPrompt,
-    setCustomPrompt,
-    customPromptMaxLength: CUSTOM_PROMPT_MAX_LENGTH,
-
-    jobs: jobsArray,
-    selectedJobId,
-    selectJob: setSelectedJobId,
-    hasMultipleJobs,
-
-    handleSubmit,
-    addJob,
-    cancelJob,
-    removeJob: removeJobServer,
-    toggleDetails,
-    handleManualImport,
-    toggleAutoImport,
-    reprompt,
-    repromptingJobId,
-    getSelectedJob,
-  };
+  const addJob = useCallback(async () => {
+    const text = inputText.trim(); const kind = sourceImages.length ? "images" : isExactHttpUrl(text) ? "url" : "text"; if (kind !== "images" && !text) return;
+    const id = crypto.randomUUID(); const optimistic = fromSnapshot({ id, sourceKind: kind, displayLabel: kind === "images" ? `${sourceImages.length} recipe images` : text.slice(0, 80), translate, extractTranscript, autoImport, customPrompt: useCustomPrompt ? customPrompt.trim() : "", status: "queued", addedAt: Date.now(), steps: DEFAULT_STEPS, warnings: [], hasRetainedContext: false });
+    setJobs((previous) => new Map(previous).set(id, optimistic)); if (!selectedRef.current || ["done", "error", "cancelled"].includes(jobsRef.current.get(selectedRef.current)?.phase ?? "done")) setSelectedJobId(id);
+    const form = new FormData(); form.set("jobId", id); form.set("kind", kind); form.set("value", text); form.set("translate", String(translate)); form.set("extractTranscript", String(extractTranscript)); form.set("autoImport", String(autoImport)); form.set("customPrompt", useCustomPrompt ? customPrompt.trim() : "");
+    for (const image of sourceImages) form.append("sourceImages", image); if (useCustomImage && customImage) form.set("customImage", customImage);
+    try { const response = await fetch("/api/parse", { method: "POST", body: form }); const data = await response.json().catch(() => ({})) as { error?: string }; if (!response.ok) throw new Error(data.error || "Submission failed."); setInputText(""); setSourceImages([]); setCustomImage(null); }
+    catch (error) { updateJob(id, { status: "error", errorMessage: error instanceof Error ? error.message : String(error) }); }
+  }, [inputText, sourceImages, customImage, translate, extractTranscript, autoImport, useCustomPrompt, customPrompt, useCustomImage, updateJob]);
+  const handleSubmit = useCallback((event: React.FormEvent) => { event.preventDefault(); void addJob(); }, [addJob]);
+  const cancelJob = useCallback(async (id: string) => { await fetch(`/api/queue/${id}`, { method: "DELETE" }); }, []);
+  const removeJob = useCallback(async (id: string) => { await fetch(`/api/queue/${id}`, { method: "DELETE" }); removeLocal(id); }, [removeLocal]);
+  const toggleDetails = useCallback((id: string, step: StepName) => setJobs((previous) => { const current = previous.get(id); if (!current) return previous; const next = new Map(previous); next.set(id, { ...current, expandedDetails: { ...current.expandedDetails, [step]: !current.expandedDetails[step] } }); return next; }), []);
+  const handleManualImport = useCallback(async (id: string) => { updateStep(id, "importing", { status: "loading", message: "Importing to Mealie..." }); const response = await fetch(`/api/import/${id}`, { method: "POST" }); const data = await response.json().catch(() => ({})) as { error?: string; recipeUrl?: string }; if (!response.ok) updateJob(id, { manualImportError: data.error ?? "Import failed." }); else updateJob(id, { recipeUrl: data.recipeUrl ?? null }); }, [updateJob, updateStep]);
+  const toggleAutoImport = useCallback(async (id: string, value: boolean) => { updateJob(id, { autoImport: value }); await fetch(`/api/queue/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ autoImport: value }) }); if (value && jobsRef.current.get(id)?.parsingDetails && !jobsRef.current.get(id)?.recipeUrl) void handleManualImport(id); }, [handleManualImport, updateJob]);
+  const reprompt = useCallback(async (id: string, prompt: string) => { setRepromptingJobId(id); repromptRef.current = id; const response = await fetch(`/api/reprompt/${id}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ customPrompt: prompt }) }); if (!response.ok) { const data = await response.json().catch(() => ({})) as { error?: string }; updateJob(id, { errorMessage: data.error ?? "Reprompt failed." }); setRepromptingJobId(null); repromptRef.current = null; } }, [updateJob]);
+  const jobsArray = [...jobs.values()].sort((a, b) => a.addedAt - b.addedAt);
+  return { inputText, setInputText, sourceImages, setSourceImages, customImage, setCustomImage, useCustomImage, setUseCustomImage, translate, setTranslate, extractTranscript, setExtractTranscript, autoImport, setAutoImport, useCustomPrompt, setUseCustomPrompt, customPrompt, setCustomPrompt, customPromptMaxLength: CUSTOM_PROMPT_MAX_LENGTH,
+    jobs: jobsArray, selectedJobId, selectJob: setSelectedJobId, hasMultipleJobs: jobsArray.length > 1, handleSubmit, addJob, cancelJob, removeJob, toggleDetails, handleManualImport, toggleAutoImport, reprompt, repromptingJobId, getSelectedJob: () => selectedJobId ? jobs.get(selectedJobId) ?? null : null };
 }

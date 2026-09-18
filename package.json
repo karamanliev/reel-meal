@@ -3,21 +3,30 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "client"
+  ],
+  "allowScripts": {
+    "esbuild": true
+  },
   "scripts": {
-    "postinstall": "[ -d client ] && npm install --prefix client || true",
     "dev": "concurrently -n server,client -c blue,green \"npm run dev:server\" \"npm run dev:client\"",
     "dev:server": "tsx watch server/index.ts",
-    "dev:client": "npm run dev --prefix client",
-    "build": "npm run build --prefix client && tsc -p tsconfig.server.json",
+    "dev:client": "npm run dev -w client",
+    "build": "npm run build -w client && tsc -p tsconfig.server.json",
     "start": "node dist/server/index.js",
-    "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p client/tsconfig.app.json --noEmit"
+    "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p client/tsconfig.app.json --noEmit",
+    "test": "tsx --test server/**/*.test.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.14.4",
+    "@mozilla/readability": "^0.6.0",
     "hono": "^4.8.1",
+    "jsdom": "^30.1.0",
     "openai": "^4.104.0"
   },
   "devDependencies": {
+    "@types/jsdom": "^30.0.0",
     "@types/node": "^22.0.0",
     "concurrently": "^9.1.2",
     "tsx": "^4.19.4",

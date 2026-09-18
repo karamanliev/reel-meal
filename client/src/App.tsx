@@ -23,8 +23,8 @@ export default function App() {
 
   useEffect(() => {
     if (!selectedJob) return;
-    if (selectedJob.phase === "review" && !selectedJob.expandedDetails.parsing && selectedJob.parsingDetails) {
-      q.toggleDetails(selectedJob.id, "parsing");
+    if (selectedJob.phase === "review" && !selectedJob.expandedDetails.generation && selectedJob.parsingDetails) {
+      q.toggleDetails(selectedJob.id, "generation");
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedJob?.phase, selectedJob?.id]);
@@ -61,8 +61,7 @@ export default function App() {
           !selectedJob.recipeUrl,
         showRepromptPanel:
           (selectedJob.phase === "review" || q.repromptingJobId === selectedJob.id) &&
-          Boolean(selectedJob.metadataDetails) &&
-          Boolean(selectedJob.transcriptDetails) &&
+          selectedJob.hasRetainedContext &&
           !selectedJob.recipeUrl,
       }
     : {
@@ -90,8 +89,14 @@ export default function App() {
         <Header queueCount={q.jobs.length} onQueueClick={() => setDrawerOpen(true)} />
 
         <UrlForm
-          url={q.url}
-          setUrl={q.setUrl}
+          inputText={q.inputText}
+          setInputText={q.setInputText}
+          sourceImages={q.sourceImages}
+          setSourceImages={q.setSourceImages}
+          customImage={q.customImage}
+          setCustomImage={q.setCustomImage}
+          useCustomImage={q.useCustomImage}
+          setUseCustomImage={q.setUseCustomImage}
           translate={q.translate}
           setTranslate={q.setTranslate}
           extractTranscript={q.extractTranscript}
@@ -109,6 +114,7 @@ export default function App() {
 
         {showProgressCard && selectedJob && (
           <ProgressCard
+            key={selectedJob.id}
             phase={selectedJob.phase}
             steps={selectedJob.steps}
             isLoading={selectedJob.phase === "loading"}
@@ -117,9 +123,11 @@ export default function App() {
             recipeUrl={selectedJob.recipeUrl}
             errorMessage={selectedJob.errorMessage}
             manualImportError={selectedJob.manualImportError}
-            metadataDetails={selectedJob.metadataDetails}
-            transcriptDetails={selectedJob.transcriptDetails}
+            sourceType={selectedJob.resolvedSourceType}
+            sourceDetails={selectedJob.sourceDetails}
+            extractedContentDetails={selectedJob.extractedContentDetails}
             parsingDetails={selectedJob.parsingDetails}
+            warnings={selectedJob.warnings}
             expandedDetails={selectedJob.expandedDetails}
             parsingDiff={selectedJobDerived.parsingDiff}
             recipeFacts={selectedJobDerived.recipeFacts}

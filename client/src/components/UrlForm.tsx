@@ -1,223 +1,49 @@
-import { useState, useRef, useEffect } from "react";
-import eggsAndBaconMascot from "../assets/images/egss_n_bacon.png";
-import plusIcon from "../assets/icons/plus.svg?raw";
-import playIcon from "../assets/icons/play.svg?raw";
-import { Icon } from "./Icon";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ACCEPTED_IMAGE_TYPES, isExactHttpUrl, validateSourceFiles } from "../lib/input";
 
-interface UrlFormProps {
-  url: string;
-  setUrl: (url: string) => void;
-  translate: boolean;
-  setTranslate: (v: boolean) => void;
-  extractTranscript: boolean;
-  setExtractTranscript: (v: boolean) => void;
-  autoImport: boolean;
-  setAutoImport: (v: boolean) => void;
-  useCustomPrompt: boolean;
-  setUseCustomPrompt: (v: boolean) => void;
-  customPrompt: string;
-  setCustomPrompt: (v: string) => void;
-  customPromptMaxLength: number;
-  onSubmit: (e: React.FormEvent) => void;
-  hasJobs: boolean;
+interface Props {
+  inputText: string; setInputText: (value: string) => void; sourceImages: File[]; setSourceImages: (files: File[]) => void;
+  customImage: File | null; setCustomImage: (file: File | null) => void; useCustomImage: boolean; setUseCustomImage: (value: boolean) => void;
+  translate: boolean; setTranslate: (value: boolean) => void; extractTranscript: boolean; setExtractTranscript: (value: boolean) => void;
+  autoImport: boolean; setAutoImport: (value: boolean) => void; useCustomPrompt: boolean; setUseCustomPrompt: (value: boolean) => void;
+  customPrompt: string; setCustomPrompt: (value: string) => void; customPromptMaxLength: number; onSubmit: (event: React.FormEvent) => void; hasJobs: boolean;
 }
 
-function ToggleButton({
-  checked,
-  onChange,
-  label,
-}: {
-  checked: boolean;
-  onChange: (v: boolean) => void;
-  label: string;
-}) {
-  return (
-    <label data-checked={checked} className="neo-toggle">
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-      />
-      <span className="neo-toggle__track" aria-hidden="true">
-        <span className="neo-toggle__thumb" />
-      </span>
-      <span className="neo-toggle__body">
-        <span className="neo-toggle__label">{label}</span>
-        <span className="neo-toggle__meta">{checked ? "Enabled" : "Disabled"}</span>
-      </span>
-    </label>
-  );
+function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (value: boolean) => void; label: string }) {
+  return <label data-checked={checked} className="neo-toggle"><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} /><span className="neo-toggle__track" aria-hidden="true"><span className="neo-toggle__thumb" /></span><span className="neo-toggle__body"><span className="neo-toggle__label">{label}</span><span className="neo-toggle__meta">{checked ? "Enabled" : "Disabled"}</span></span></label>;
 }
 
-export function UrlForm({
-  url,
-  setUrl,
-  translate,
-  setTranslate,
-  extractTranscript,
-  setExtractTranscript,
-  autoImport,
-  setAutoImport,
-  useCustomPrompt,
-  setUseCustomPrompt,
-  customPrompt,
-  setCustomPrompt,
-  customPromptMaxLength,
-  onSubmit,
-  hasJobs,
-}: UrlFormProps) {
-  const [isExpanded, setIsExpanded] = useState(() => !hasJobs);
-  const inputRef = useRef<HTMLInputElement>(null);
+function Preview({ file, onRemove, label }: { file: File; onRemove: () => void; label: string }) {
+  const url = useMemo(() => URL.createObjectURL(file), [file]); useEffect(() => () => URL.revokeObjectURL(url), [url]);
+  return <div className="relative overflow-hidden rounded-xl border-3 border-black bg-white"><img src={url} alt={label} className="h-28 w-full object-cover" /><button type="button" onClick={onRemove} aria-label={`Remove ${label}`} className="absolute right-1 top-1 rounded-md border-2 border-black bg-white px-2 py-1 text-xs font-800">Remove</button><p className="m-0 truncate px-2 py-1 text-xs font-700">{file.name}</p></div>;
+}
 
-  useEffect(() => {
-    if (!hasJobs || isExpanded) {
-      const delay = hasJobs ? 310 : 0;
-      const timer = setTimeout(() => {
-        inputRef.current?.focus();
-      }, delay);
-      return () => clearTimeout(timer);
-    }
-  }, [hasJobs, isExpanded]);
-
-  const handleFormSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!url.trim()) return;
-    onSubmit(e);
-    setIsExpanded(false);
+export function UrlForm(props: Props) {
+  const [expanded, setExpanded] = useState(!props.hasJobs); const [error, setError] = useState(""); const textarea = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => { if (!props.hasJobs || expanded) { const timer = setTimeout(() => textarea.current?.focus(), props.hasJobs ? 310 : 0); return () => clearTimeout(timer); } }, [props.hasJobs, expanded]);
+  const detectedUrl = isExactHttpUrl(props.inputText); const hasSource = Boolean(props.inputText.trim() || props.sourceImages.length);
+  const addSourceFiles = (incoming: File[]) => {
+    if (!incoming.length) return; if (props.inputText.trim() && !window.confirm("Replace the current text or URL with image files?")) return;
+    const combined = props.inputText.trim() ? incoming : [...props.sourceImages, ...incoming]; const validation = validateSourceFiles(combined); if (validation) { setError(validation); return; }
+    props.setInputText(""); props.setSourceImages(combined); setError("");
   };
-
-  const submitLabel = hasJobs
-    ? "Add to queue"
-    : autoImport
-      ? "Import recipe"
-      : "Generate recipe";
-
-  const toggleHelpText = hasJobs
-    ? "These settings will apply to the next recipe in queue."
-    : "Use the toggles to control translation, transcript extraction, custom prompting, and direct import.";
-
-  const formContent = (
-    <div className="relative bg-pink px-5 py-5 sm:px-7 sm:py-7 lg:min-h-[520px]">
-      <p className="max-w-3xl neo-copy text-ink font-300">
-        Paste a YouTube, Instagram, or TikTok link. ReelMeal extracts the
-        recipe, normalizes the output, and gets it ready for Mealie.
-        Multiple URLs are processed one at a time.
-      </p>
-
-      <div className="mt-6 flex max-w-4xl flex-col gap-3 lg:flex-row lg:items-center">
-        <input
-          ref={inputRef}
-          className="neo-input min-h-[58px] flex-1"
-          type="url"
-          placeholder="https://youtube.com/watch?v=..."
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          required
-        />
-          <button
-                  className="neo-btn min-h-[58px] w-full whitespace-nowrap bg-sun text-[1.08rem] hover:bg-[#ffe08f] disabled:opacity-100 disabled:bg-[#e5e5e5] disabled:text-[#5b5b5b] disabled:shadow-neo-pressed lg:w-auto lg:min-w-48"
-                  type="submit"
-                  disabled={!url.trim()}
-                >
-                  <Icon src={playIcon} className="h-4 w-4" />
-                  {submitLabel}
-                </button>
-      </div>
-
-      <p className="mt-8 max-w-2xl text-[0.98rem] leading-6 font-300 text-ink">
-        {toggleHelpText}
-      </p>
-
-      <div className="mt-6 grid md:grid-cols-2 gap-3 max-w-2xl">
-        <ToggleButton checked={translate} onChange={setTranslate} label="Translate to English" />
-        <ToggleButton checked={useCustomPrompt} onChange={setUseCustomPrompt} label="Use a custom prompt" />
-        <ToggleButton checked={extractTranscript} onChange={setExtractTranscript} label="Extract transcript" />
-        <ToggleButton checked={autoImport} onChange={setAutoImport} label="Auto-import to Mealie" />
-      </div>
-
-      {useCustomPrompt && (
-        <div className="mt-7 max-w-xl">
-          <div className="flex items-center justify-between gap-3">
-            <p className="neo-overline !text-[#fffdfd]">Custom parser instructions</p>
-            <span className="text-[0.78rem] font-ui font-700" style={{ color: "#fffdfd" }}>
-              {customPrompt.length}/{customPromptMaxLength}
-            </span>
-          </div>
-          <textarea
-            className="neo-textarea mt-3 min-h-32"
-            value={customPrompt}
-            onChange={(e) => setCustomPrompt(e.target.value)}
-            placeholder='Add extra instructions, like "prefer metric units" or "keep steps concise".'
-            maxLength={customPromptMaxLength}
-            rows={4}
-          />
-          <p className="m-0 mt-3 text-[0.92rem] font-600 italic opacity-80" style={{ color: "#fffdfd" }}>
-            These instructions are appended to the built-in parser prompt.
-          </p>
-        </div>
-      )}
-
-      <img
-        src={eggsAndBaconMascot}
-        alt=""
-        className="pointer-events-none absolute right-[-45px] top-[215px] lg:top-[145px] hidden h-[305px] lg:block lg:h-[375px]"
-      />
+  const changeText = (value: string) => { if (value.trim() && props.sourceImages.length && !window.confirm("Replace the current image source with text or a URL?")) return; if (value.trim()) props.setSourceImages([]); props.setInputText(value); setError(value.length > 100_000 ? "Text must be 100,000 characters or fewer." : ""); };
+  const chooseCustom = (file: File | null) => { if (file && (!ACCEPTED_IMAGE_TYPES.includes(file.type) || file.size > 10 * 1024 * 1024)) { setError("Custom image must be JPEG, PNG, WebP, or GIF and no larger than 10 MB."); return; } props.setCustomImage(file); setError(""); };
+  const content = <div className="relative bg-pink px-5 py-5 sm:px-7 sm:py-7">
+    <p className="neo-copy max-w-3xl font-300 text-ink">Paste one video or recipe-page URL, paste complete recipe text, or add up to 10 recipe images. Shared content is always shown here for review before submission.</p>
+    <textarea ref={textarea} className="neo-textarea mt-5 min-h-32" value={props.inputText} onChange={(event) => changeText(event.target.value)} onPaste={(event) => { const images = [...event.clipboardData.files].filter((file) => file.type.startsWith("image/")); if (images.length) { event.preventDefault(); addSourceFiles(images); } }} placeholder="Paste an exact URL or a complete recipe..." aria-label="Recipe URL or pasted text" />
+    <div className="mt-4 rounded-2xl border-4 border-dashed border-black bg-white/70 p-5 text-center" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); addSourceFiles([...event.dataTransfer.files]); }}>
+      <p className="m-0 font-800">Drop recipe images here</p><p className="mt-1 text-sm">JPEG, PNG, WebP, or GIF. 10 files, 10 MB each, 50 MB total.</p>
+      <label className="neo-btn-secondary mt-3 inline-flex cursor-pointer">Choose images<input type="file" className="sr-only" accept="image/jpeg,image/png,image/webp,image/gif" multiple onChange={(event) => addSourceFiles([...(event.target.files ?? [])])} /></label>
     </div>
-  );
-
-  // Clean slate: no jobs ever — just the form, no toggle header
-  if (!hasJobs) {
-    return (
-      <form className="w-full relative z-10" onSubmit={handleFormSubmit}>
-        <div className="overflow-hidden rounded-[24px] border-4 border-solid border-black shadow-neo">
-          {formContent}
-        </div>
-      </form>
-    );
-  }
-
-  // Has jobs: card with compact header + expandable form content
-  return (
-    <div className="w-full relative z-10 overflow-hidden rounded-[24px] border-4 border-solid border-black shadow-neo">
-      {/* Compact header — always visible, acts as expand/collapse toggle */}
-      <button
-        type="button"
-        onClick={() => setIsExpanded((v) => !v)}
-        className="w-full flex items-center gap-3 bg-pink px-5 py-4 sm:px-7 cursor-pointer select-none"
-      >
-        <Icon src={plusIcon} className="h-7 w-7 sm:h-8 sm:w-8 shrink-0" />
-        <div className="text-left min-w-0">
-          <p className="m-0 font-display text-[1.1rem] font-800 text-ink sm:text-[1.2rem]">
-            Add another recipe
-          </p>
-          <p className="m-0 text-[0.82rem] font-400 text-ink/70">
-            New recipes are queued automatically.
-          </p>
-        </div>
-        {/* Chevron */}
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          className={`ml-auto h-5 w-5 shrink-0 text-ink transition-transform duration-300 ${isExpanded ? "rotate-180" : "rotate-0"}`}
-        >
-          <polyline points="6 9 12 15 18 9" />
-        </svg>
-      </button>
-
-      {/* Expandable content via grid trick */}
-      <form
-        onSubmit={handleFormSubmit}
-        className="grid transition-[grid-template-rows] duration-300 ease-in-out"
-        style={{ gridTemplateRows: isExpanded ? "1fr" : "0fr" }}
-      >
-        <div className="overflow-hidden min-h-0">
-          {formContent}
-        </div>
-      </form>
-    </div>
-  );
+    {props.sourceImages.length > 0 && <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-5">{props.sourceImages.map((file, index) => <Preview key={`${file.name}-${file.lastModified}-${index}`} file={file} label={`source image ${index + 1}`} onRemove={() => props.setSourceImages(props.sourceImages.filter((_, item) => item !== index))} />)}</div>}
+    {error && <p className="mt-3 font-700 text-[#7b1111]" role="alert">{error}</p>}
+    <div className="mt-6 grid gap-3 md:grid-cols-2"><Toggle checked={props.translate} onChange={props.setTranslate} label="Translate to English" /><Toggle checked={props.useCustomPrompt} onChange={props.setUseCustomPrompt} label="Use a custom prompt" />{detectedUrl && <Toggle checked={props.extractTranscript} onChange={props.setExtractTranscript} label="Extract video transcript" />}<Toggle checked={props.autoImport} onChange={props.setAutoImport} label="Auto-import to Mealie" /><Toggle checked={props.useCustomImage} onChange={props.setUseCustomImage} label="Use a custom recipe image" /></div>
+    {props.useCustomImage && <div className="mt-5 max-w-sm rounded-xl border-3 border-black bg-white/70 p-4"><p className="m-0 text-sm font-700">This image is only the final Mealie cover. It is not sent to the recipe model.</p>{props.customImage ? <div className="mt-3"><Preview file={props.customImage} label="custom recipe cover" onRemove={() => props.setCustomImage(null)} /></div> : <label className="neo-btn-secondary mt-3 inline-flex cursor-pointer">Choose cover<input type="file" className="sr-only" accept="image/jpeg,image/png,image/webp,image/gif" onChange={(event) => chooseCustom(event.target.files?.[0] ?? null)} /></label>}</div>}
+    {props.useCustomPrompt && <div className="mt-5 max-w-xl"><div className="flex justify-between"><p className="neo-overline !text-white">Custom parser instructions</p><span className="font-700 text-white">{props.customPrompt.length}/{props.customPromptMaxLength}</span></div><textarea className="neo-textarea mt-2 min-h-28" value={props.customPrompt} onChange={(event) => props.setCustomPrompt(event.target.value)} maxLength={props.customPromptMaxLength} placeholder="Prefer metric units, keep steps concise..." /></div>}
+    <button type="submit" disabled={!hasSource || Boolean(error)} className="neo-btn mt-6 min-h-14 w-full bg-sun disabled:bg-[#ddd] sm:w-auto">{props.hasJobs ? "Add to queue" : props.autoImport ? "Import recipe" : "Generate recipe"}</button>
+  </div>;
+  const submit = (event: React.FormEvent) => { props.onSubmit(event); if (hasSource && !error) setExpanded(false); };
+  if (!props.hasJobs) return <form className="relative z-10 w-full overflow-hidden rounded-[24px] border-4 border-black shadow-neo" onSubmit={submit}>{content}</form>;
+  return <div className="relative z-10 w-full overflow-hidden rounded-[24px] border-4 border-black shadow-neo"><button type="button" onClick={() => setExpanded((value) => !value)} className="flex w-full items-center bg-pink px-6 py-4 text-left font-display text-xl font-800">Add another recipe <span className="ml-auto">{expanded ? "−" : "+"}</span></button><form onSubmit={submit} className="grid transition-[grid-template-rows] duration-300" style={{ gridTemplateRows: expanded ? "1fr" : "0fr" }}><div className="min-h-0 overflow-hidden">{content}</div></form></div>;
 }

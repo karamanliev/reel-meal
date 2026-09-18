@@ -1,23 +1,2 @@
-import type { TranscriptDetails as TranscriptDetailsType } from "../lib/types";
-
-export function TranscriptDetails({
-  details,
-}: {
-  details: TranscriptDetailsType;
-}) {
-  return (
-    <div className="mt-4 p-4 sm:p-5">
-      <p className="m-0 text-sm leading-6 font-500 text-ink">
-        <strong className="font-700 text-[#637044]">Source:</strong>{" "}
-        {details.source === "subtitles" ? "Subtitles" : "Audio transcription"}
-      </p>
-
-      <textarea
-        className="neo-textarea mt-4 min-h-42"
-        readOnly
-        value={details.transcript}
-        aria-label="Extracted transcript"
-      />
-    </div>
-  );
-}
+import type { ExtractedContentDetails } from "../lib/types";
+export function TranscriptDetails({ details }: { details: ExtractedContentDetails }) { return <div className="mt-4 p-4 sm:p-5"><p className="m-0 text-sm font-500"><strong className="font-700 text-[#637044]">Content source:</strong> {details.source}</p><textarea className="neo-textarea mt-4 min-h-42" readOnly value={details.content} aria-label="Extracted recipe content" /></div>; }
