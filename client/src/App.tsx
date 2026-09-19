@@ -95,6 +95,8 @@ export default function App() {
           setSourceImages={q.setSourceImages}
           customImage={q.customImage}
           setCustomImage={q.setCustomImage}
+          customImageUrl={q.customImageUrl}
+          setCustomImageUrl={q.setCustomImageUrl}
           useCustomImage={q.useCustomImage}
           setUseCustomImage={q.setUseCustomImage}
           extractTranscript={q.extractTranscript}

@@ -359,87 +359,35 @@ textarea.neo-textarea.smart-source-textarea:focus {
   font-size: 1rem;
 }
 
-.toolbar-cover-button {
-  display: inline-flex;
-  min-height: 2.75rem;
-  align-items: center;
-  gap: 0.4rem;
-  border: 2px dashed #5e5e5e;
-  border-radius: 7px;
-  background: transparent;
-  padding: 0.45rem 0.65rem;
-  color: #313131;
-  font-size: 0.78rem;
-  font-weight: 700;
-  line-height: 1;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background-color 0.15s ease, border-color 0.15s ease;
-}
-
-.toolbar-cover-control {
-  display: inline-flex;
-  min-width: 0;
-  align-items: stretch;
-}
-
-.toolbar-cover-control--selected {
-  border: 2px solid #637044;
-  border-radius: 7px;
-  background: #edf7d3;
-}
-
-.toolbar-cover-control--selected .toolbar-cover-button {
-  min-height: 2.5rem;
+.cover-source-input {
+  width: 100%;
+  min-height: 3.625rem;
   border: 0;
-  border-radius: 5px 0 0 5px;
-  background: transparent;
+  background: #fff;
+  padding: 0.9rem 1rem;
+  color: #171717;
+  font: inherit;
+  outline: none;
 }
 
-.toolbar-cover-button__content {
-  display: inline-flex;
-  min-width: 0;
-  align-items: center;
-  gap: 0.4rem;
-  transform: translateY(2px);
+.cover-source-toolbar {
+  justify-content: flex-start;
 }
 
-.toolbar-cover-button:hover,
-.toolbar-cover-button:focus-visible {
-  border-color: #171717;
-  background: #fff2c6;
-}
-
-.toolbar-cover-button--selected {
-  border-style: solid;
-}
-
-.toolbar-cover-button svg {
-  width: 1rem;
-  height: 1rem;
-  flex: 0 0 auto;
-}
-
-.toolbar-cover-remove {
-  display: inline-flex;
-  width: 2rem;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
+.cover-source-remove {
   border: 0;
-  border-left: 2px solid #637044;
-  border-radius: 0 5px 5px 0;
   background: transparent;
   color: #8d1e1e;
-  font-size: 1.15rem;
-  font-weight: 800;
-  line-height: 1;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-decoration: underline;
   cursor: pointer;
 }
 
-.toolbar-cover-remove:hover,
-.toolbar-cover-remove:focus-visible {
-  background: #fde8e8;
+.cover-source-remove:hover,
+.cover-source-remove:focus-visible {
+  color: #5f0808;
 }
 
 @media (max-width: 520px) {
@@ -490,6 +438,11 @@ textarea.neo-textarea.smart-source-textarea:focus {
     min-height: 3.25rem;
   }
 
+  .cover-source-input {
+    padding-inline: 0.75rem;
+    font-size: 0.9rem;
+  }
+
   .smart-source-toolbar {
     gap: 0.5rem;
     align-items: stretch;
@@ -500,41 +453,32 @@ textarea.neo-textarea.smart-source-textarea:focus {
   .smart-source-actions {
     display: grid;
     width: 100%;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
     gap: 0.5rem;
   }
 
   .smart-source-picker,
-  .toolbar-cover-control,
-  .toolbar-cover-button,
   .smart-submit-button {
     width: 100%;
     min-width: 0;
   }
 
-  .smart-source-picker,
-  .toolbar-cover-button {
+  .smart-source-picker {
     padding-inline: 0.55rem;
   }
 
   .smart-source-picker,
-  .smart-submit-button,
-  .toolbar-cover-button {
+  .smart-submit-button {
     min-height: 2.5rem;
     padding-block: 0.5rem;
     font-size: 0.88rem;
-  }
-
-  .toolbar-cover-button {
-    font-size: 0.74rem;
   }
 
   .smart-submit-button {
     font-size: 0.92rem;
   }
 
-  .smart-source-picker__content,
-  .toolbar-cover-button__content {
+  .smart-source-picker__content {
     justify-content: center;
   }
 }

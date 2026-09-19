@@ -210,13 +210,19 @@ parseRouter.post("/api/parse", bodyLimit({ maxSize: MAX_MULTIPART_BYTES, onError
     const body = await c.req.parseBody({ all: true }) as Record<string, string | File | (string | File)[]>;
     jobId = safeJobId(field(body, "jobId")); const kind = field(body, "kind"); const value = field(body, "value").trim();
     const customPrompt = field(body, "customPrompt").trim(); if (customPrompt.length > MAX_CUSTOM_PROMPT_CHARS) throw new Error("Custom prompt is too long.");
-    const sourceFiles = files(body, "sourceImages"); const customFiles = files(body, "customImage");
+    const sourceFiles = files(body, "sourceImages"); const customFiles = files(body, "customImage"); const customImageUrl = field(body, "customImageUrl").trim();
     if (!['url', 'text', 'images'].includes(kind)) throw new Error("Invalid input kind.");
     if ((kind === "images" && value) || (kind !== "images" && sourceFiles.length)) throw new Error("A job must contain exactly one recipe source type.");
     if (kind !== "images" && !value) throw new Error("Recipe source is empty.");
+    if (customFiles.length && customImageUrl) throw new Error("Choose either a custom cover file or URL, not both.");
     let sourceAssets: ManagedAsset[] = []; let customImage: ManagedAsset | null = null;
     if (sourceFiles.length) sourceAssets = await assetManager.saveUploads(jobId, sourceFiles, "source");
     if (customFiles.length) customImage = (await assetManager.saveUploads(jobId, customFiles, "custom"))[0] ?? null;
+    if (customImageUrl) {
+      if (!isExactHttpUrl(customImageUrl)) throw new Error("Custom cover URL must be one complete HTTP or HTTPS URL.");
+      const response = await safeFetchBuffer(customImageUrl, { maxBytes: 10 * 1024 * 1024, timeoutMs: 10_000, contentTypes: ["image/jpeg", "image/png", "image/webp", "image/gif"] });
+      customImage = await assetManager.saveRemote(jobId, response.buffer, response.contentType, "custom-cover");
+    }
     let source: SubmittedSource;
     if (kind === "url") { if (!isExactHttpUrl(value)) throw new Error("URL must be one complete HTTP or HTTPS URL."); source = { kind: "url", url: value }; } else if (kind === "text") { const text = assertModelInputLength(value); buildTextModelInput({ sourceType: "text", title: "Pasted recipe", description: "", body: text, attributionUrl: "", extractionMethod: "pasted-text", customPrompt }); source = { kind: "text", text }; } else { if (!sourceAssets.length) throw new Error("Choose at least one source image."); source = { kind: "images", assetIds: sourceAssets.map((asset) => asset.id) }; }
     const displayLabel = source.kind === "url" ? source.url : source.kind === "text" ? source.text.slice(0, 80) : `${sourceAssets.length} recipe image${sourceAssets.length === 1 ? "" : "s"}`;

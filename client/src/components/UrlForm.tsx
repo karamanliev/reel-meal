@@ -15,6 +15,8 @@ interface Props {
   setSourceImages: (files: File[]) => void;
   customImage: File | null;
   setCustomImage: (file: File | null) => void;
+  customImageUrl: string;
+  setCustomImageUrl: (value: string) => void;
   useCustomImage: boolean;
   setUseCustomImage: (value: boolean) => void;
   extractTranscript: boolean;
@@ -95,6 +97,7 @@ export function UrlForm(props: Props) {
   const [expanded, setExpanded] = useState(!props.hasJobs);
   const [error, setError] = useState("");
   const [dragActive, setDragActive] = useState(false);
+  const [coverDragActive, setCoverDragActive] = useState(false);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const sourceInput = useRef<HTMLInputElement>(null);
   const customInput = useRef<HTMLInputElement>(null);
@@ -116,7 +119,10 @@ export function UrlForm(props: Props) {
     : props.inputText.length > 100_000
       ? "Text must be 100,000 characters or fewer."
       : "";
-  const displayedError = error || validationError;
+  const coverUrlError = props.useCustomImage && props.customImageUrl.trim() && !isExactHttpUrl(props.customImageUrl)
+    ? "Custom cover URL must be one complete HTTP or HTTPS URL."
+    : "";
+  const displayedError = error || validationError || coverUrlError;
 
   const addSourceFiles = (incoming: File[]) => {
     if (!incoming.length) return;
@@ -170,13 +176,13 @@ export function UrlForm(props: Props) {
       return;
     }
     props.setCustomImage(file);
-    props.setUseCustomImage(Boolean(file));
+    if (file) props.setCustomImageUrl("");
     setError("");
   };
 
   const removeCustomImage = () => {
     props.setCustomImage(null);
-    props.setUseCustomImage(false);
+    props.setCustomImageUrl("");
   };
 
   const content = (
@@ -231,7 +237,7 @@ export function UrlForm(props: Props) {
               addSourceFiles(images);
             }
           }}
-          placeholder="Paste an exact URL or a complete recipe..."
+          placeholder="Paste a link, image, or text..."
           aria-label="Recipe URL or pasted text"
         />
         <div className="smart-source-toolbar">
@@ -255,53 +261,6 @@ export function UrlForm(props: Props) {
                 <span>Add images</span>
               </span>
             </button>
-            <input
-              ref={customInput}
-              type="file"
-              className="sr-only"
-              accept="image/jpeg,image/png,image/webp,image/gif"
-              onChange={(event) => {
-                chooseCustom(event.target.files?.[0] ?? null);
-                event.target.value = "";
-              }}
-            />
-            <div
-              className={`toolbar-cover-control ${props.customImage ? "toolbar-cover-control--selected" : ""}`}
-            >
-              <button
-                type="button"
-                className={`toolbar-cover-button ${props.customImage ? "toolbar-cover-button--selected" : ""}`}
-                onClick={() => customInput.current?.click()}
-                title={props.customImage?.name ?? "Optional custom Mealie cover"}
-                aria-label={props.customImage ? `Replace custom recipe cover ${props.customImage.name}` : "Add custom recipe cover"}
-              >
-                <span className="toolbar-cover-button__content">
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    aria-hidden="true"
-                  >
-                    <rect x="3" y="4" width="18" height="16" rx="2" />
-                    <circle cx="8.5" cy="9" r="1.5" />
-                    <path d="m4 17 4-4 3 3 4-5 5 6" />
-                  </svg>
-                  <span className="max-w-32 truncate">{props.customImage?.name ?? "Add cover"}</span>
-                </span>
-              </button>
-              {props.customImage && (
-                <button
-                  type="button"
-                  className="toolbar-cover-remove"
-                  onClick={removeCustomImage}
-                  aria-label="Remove custom recipe cover"
-                  title="Remove custom recipe cover"
-                >
-                  <span aria-hidden="true">×</span>
-                </button>
-              )}
-            </div>
           </div>
           <button
             type="submit"
@@ -366,6 +325,11 @@ export function UrlForm(props: Props) {
             onChange={props.setUseCustomPrompt}
             label="Use a custom prompt"
           />
+          <Toggle
+            checked={props.useCustomImage}
+            onChange={props.setUseCustomImage}
+            label="Use a custom cover"
+          />
           {detectedUrl && (
             <Toggle
               checked={props.extractTranscript}
@@ -380,6 +344,77 @@ export function UrlForm(props: Props) {
           />
         </div>
       </div>
+
+      {props.useCustomImage && (
+        <div className="relative z-10 mt-4 max-w-xl sm:mt-5">
+          <p className="neo-overline mb-2 !text-ink">Custom recipe cover</p>
+          <div
+            className={`smart-source-shell cover-source-shell ${coverDragActive ? "smart-source-shell--dragging" : ""}`}
+            onDragEnter={(event) => { event.preventDefault(); setCoverDragActive(true); }}
+            onDragOver={(event) => { event.preventDefault(); setCoverDragActive(true); }}
+            onDragLeave={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node)) setCoverDragActive(false);
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              setCoverDragActive(false);
+              const image = [...event.dataTransfer.files].find((file) => file.type.startsWith("image/"));
+              if (image) chooseCustom(image);
+              else setError("Drop a JPEG, PNG, WebP, or GIF custom cover.");
+            }}
+          >
+            <input
+              className="cover-source-input"
+              value={props.customImage ? props.customImage.name : props.customImageUrl}
+              onChange={(event) => {
+                if (props.customImage) props.setCustomImage(null);
+                props.setCustomImageUrl(event.target.value);
+                setError("");
+              }}
+              onPaste={(event) => {
+                const image = [...event.clipboardData.files].find((file) => file.type.startsWith("image/"));
+                if (image) { event.preventDefault(); chooseCustom(image); }
+              }}
+              placeholder="Paste an image URL or image..."
+              aria-label="Custom cover URL or pasted image"
+            />
+            <div className="smart-source-toolbar cover-source-toolbar">
+              <button
+                type="button"
+                className="neo-btn-secondary smart-source-picker"
+                onClick={() => customInput.current?.click()}
+              >
+                <span className="smart-source-picker__content">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4" aria-hidden="true">
+                    <rect x="3" y="4" width="18" height="16" rx="2" />
+                    <circle cx="8.5" cy="9" r="1.5" />
+                    <path d="m4 17 4-4 3 3 4-5 5 6" />
+                  </svg>
+                  <span>{props.customImage ? "Replace cover" : "Add cover"}</span>
+                </span>
+              </button>
+              {(props.customImage || props.customImageUrl) && (
+                <button type="button" className="cover-source-remove" onClick={removeCustomImage}>
+                  Clear cover
+                </button>
+              )}
+            </div>
+          </div>
+          <input
+            ref={customInput}
+            type="file"
+            className="sr-only"
+            accept="image/jpeg,image/png,image/webp,image/gif"
+            onChange={(event) => {
+              chooseCustom(event.target.files?.[0] ?? null);
+              event.target.value = "";
+            }}
+          />
+          <p className="mt-2 text-xs font-600 italic text-ink/50">
+            Drop or paste one image, enter its direct URL, or use Add cover. Maximum 10 MB.
+          </p>
+        </div>
+      )}
 
       {props.useCustomPrompt && (
         <div className="mt-4 max-w-xl sm:mt-5">
