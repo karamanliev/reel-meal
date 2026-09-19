@@ -8,13 +8,14 @@
 # ---------------------------------------------------------------------------
 FROM node:22-alpine AS frontend-builder
 
-WORKDIR /app/client
+WORKDIR /app
 
-COPY client/package*.json ./
+COPY package*.json ./
+COPY client/package.json ./client/package.json
 RUN npm ci
 
-COPY client/ ./
-RUN npm run build
+COPY client/ ./client/
+RUN npm run build -w client
 
 # ---------------------------------------------------------------------------
 # Stage 2: Compile the server TypeScript
@@ -24,6 +25,7 @@ FROM node:22-alpine AS server-builder
 WORKDIR /app
 
 COPY package*.json ./
+COPY client/package.json ./client/package.json
 RUN npm ci --ignore-scripts
 
 COPY tsconfig.server.json ./
@@ -45,6 +47,7 @@ WORKDIR /app
 
 # Install only production dependencies
 COPY package*.json ./
+COPY client/package.json ./client/package.json
 RUN npm ci --omit=dev --ignore-scripts
 
 # Copy compiled server from stage 2

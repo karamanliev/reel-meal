@@ -1,816 +1,230 @@
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { streamSSE } from "hono/streaming";
-import {
-  fetchMetadata,
-  extractSubtitles,
-  downloadAudio,
-  downloadThumbnail,
-  type VideoMetadata,
-} from "../lib/ytdlp.js";
+import { readFile } from "node:fs/promises";
+import { fetchMetadata, extractSubtitles, downloadAudio, type VideoMetadata } from "../lib/ytdlp.js";
 import { transcribeAudio } from "../lib/transcribe.js";
-import { parseRecipeFromTranscript } from "../lib/llm.js";
-import {
-  importRecipe,
-  prepareRecipeImport,
-  type PreparedRecipeImport,
-  type RecipeImportPayload,
-} from "../lib/mealie.js";
-import { jobQueue, type StepName, type StepState, type JobMetadataDetails } from "../lib/queue.js";
+import { parseRecipeSource, IncompleteRecipeError } from "../lib/llm.js";
+import { importRecipe, prepareRecipeImport } from "../lib/mealie.js";
+import { assetManager, type ManagedAsset } from "../lib/assets.js";
+import { extractRecipeWebpage } from "../lib/webpage.js";
+import { safeFetchBuffer, validatePublicUrl } from "../lib/safe-fetch.js";
+import { assertModelInputLength, buildTextModelInput, isExactHttpUrl, MAX_CUSTOM_PROMPT_CHARS, MAX_MULTIPART_BYTES, type SubmittedSource } from "../lib/input.js";
+import { jobQueue, type Job, type StepName, type StepState, type SourceDetails, type ExtractedContentDetails } from "../lib/queue.js";
 
-// -------------------------------------------------------------------------
-// SSE event types (shared with frontend)
-// -------------------------------------------------------------------------
+type SSEEvent = { step: StepName; status: StepState["status"]; message?: string; data?: Record<string, unknown>; error?: string };
+type Emit = (event: SSEEvent) => Promise<void>;
 
-export type SSEStepName = "metadata" | "transcript" | "parsing" | "importing";
-export type SSEStepStatus = "loading" | "done" | "error";
-
-export interface SSEEvent {
-  step: SSEStepName;
-  status: SSEStepStatus;
-  message?: string;
-  data?: Record<string, unknown>;
-  error?: string;
-}
-
-// -------------------------------------------------------------------------
-// Helpers
-// -------------------------------------------------------------------------
-
-type EmitFn = (event: SSEEvent) => Promise<void>;
-
-const CUSTOM_PROMPT_MAX_LENGTH = 400;
-
-const QUANTITY_UNIT_RE =
-  /(?:\d+(?:[.,]\d+)?|\d+\/\d+|[¼½¾⅓⅔⅛⅜⅝⅞])\s?(?:g|kg|mg|ml|l|tbsp|tsp|cup|cups|oz|lb|бр\.?|ч\.л\.?|с\.л\.?|гр\.?|кг|мл|л)\b/giu;
-
-const RECIPE_SIGNAL_PATTERNS: RegExp[] = [
-  /ingredients?/i,
-  /instructions?/i,
-  /directions?/i,
-  /method/i,
-  /recipe/i,
-  /съставки/i,
-  /продукти/i,
-  /начин на приготвяне/i,
-  /приготвяне/i,
-  /разбърка/i,
-  /добави/i,
-  /печ[еи]/i,
-];
-
-const THIN_DESCRIPTION_REASON =
-  "Transcript extraction is disabled and the available description looks too thin for a reliable parse. Enable transcript extraction and try again.";
-const SHORT_DESCRIPTION_REASON =
-  "Transcript extraction is disabled and the video description does not contain enough recipe detail to build a reliable recipe. Enable transcript extraction and try again.";
-
-function hasEnoughRecipeContext(description: string): { ok: boolean; reason?: string } {
-  const trimmed = description.trim();
-
-  if (trimmed.length < 160) {
-    return { ok: false, reason: SHORT_DESCRIPTION_REASON };
-  }
-
-  const quantityCount = (trimmed.match(QUANTITY_UNIT_RE) ?? []).length;
-  const signalCount = RECIPE_SIGNAL_PATTERNS.filter((p) => p.test(trimmed)).length;
-  const lineCount = trimmed
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter(Boolean).length;
-
-  if (quantityCount >= 2 && (signalCount >= 1 || lineCount >= 4)) {
-    return { ok: true };
-  }
-
-  return { ok: false, reason: THIN_DESCRIPTION_REASON };
-}
-
-async function transcribeViaAudio(
-  videoUrl: string,
-  emit: EmitFn,
-  downloadMessage: string,
-): Promise<{ transcript: string; cleanup: (() => Promise<void>) | null }> {
-  await emit({ step: "transcript", status: "loading", message: downloadMessage });
-
-  const audioResult = await downloadAudio(videoUrl);
-
-  await emit({ step: "transcript", status: "loading", message: "Transcribing audio..." });
-
-  const transcript = await transcribeAudio(audioResult.filePath);
-  console.log(`[parse] Transcription done (${transcript.length} chars)`);
-
-  await emit({
-    step: "transcript",
-    status: "done",
-    message: "Audio transcribed.",
-    data: { transcript, source: "audio" },
-  });
-
-  return { transcript, cleanup: audioResult.cleanup };
-}
-
-async function runRecipeImport(params: {
-  preparedImport: PreparedRecipeImport;
-  thumbnailUrl?: string;
-}): Promise<{ recipeUrl: string; slug: string }> {
-  const { preparedImport, thumbnailUrl } = params;
-
-  let thumbCleanup: (() => Promise<void>) | null = null;
-
-  try {
-    let thumbnailFilePath: string | undefined;
-    if (thumbnailUrl) {
-      try {
-        const thumb = await downloadThumbnail(thumbnailUrl);
-        thumbnailFilePath = thumb.filePath;
-        thumbCleanup = thumb.cleanup;
-      } catch (err) {
-        console.warn(`[parse] Thumbnail download failed: ${err instanceof Error ? err.message : err}`);
-      }
-    }
-
-    return await importRecipe({
-      preparedImport,
-      thumbnailFilePath,
-    });
-  } finally {
-    if (thumbCleanup) await thumbCleanup().catch(() => {});
-  }
-}
-
-// -------------------------------------------------------------------------
-// Pipeline steps
-// -------------------------------------------------------------------------
-
-async function stepMetadata(url: string, emit: EmitFn): Promise<VideoMetadata> {
-  await emit({ step: "metadata", status: "loading", message: "Fetching video info..." });
-
-  const metadata = await fetchMetadata(url);
-  const proxiedThumbnailUrl = metadata.thumbnailUrl
-    ? `/api/thumbnail?url=${encodeURIComponent(metadata.thumbnailUrl)}`
-    : "";
-  console.log(`[parse] Metadata fetched: "${metadata.title}"`);
-
-  await emit({
-    step: "metadata",
-    status: "done",
-    message: `Found: ${metadata.title}`,
-    data: {
-      title: metadata.title,
-      thumbnailUrl: proxiedThumbnailUrl,
-      duration: metadata.duration,
-      uploader: metadata.uploader,
-      description: metadata.description,
-      webpageUrl: metadata.webpageUrl,
-      thumbnailSourceUrl: metadata.thumbnailUrl,
-      hasSubtitles: metadata.hasSubtitles,
-      subtitleLanguage: metadata.subtitleLanguage,
-    },
-  });
-
-  return metadata;
-}
-
-interface TranscriptResult {
-  transcript: string;
-  source: "subtitles" | "audio" | null;
-  audioCleanup: (() => Promise<void>) | null;
-  aborted: boolean;
-}
-
-async function stepTranscript(
-  url: string,
-  metadata: VideoMetadata,
-  extractTranscript: boolean,
-  emit: EmitFn,
-): Promise<TranscriptResult> {
-  if (!extractTranscript) {
-    await emit({ step: "transcript", status: "done", message: "Skipped." });
-
-    const contextCheck = hasEnoughRecipeContext(metadata.description);
-    if (!contextCheck.ok) {
-      await emit({ step: "parsing", status: "error", error: contextCheck.reason });
-      return { transcript: "", source: null, audioCleanup: null, aborted: true };
-    }
-    return { transcript: "", source: null, audioCleanup: null, aborted: false };
-  }
-
-  if (metadata.hasSubtitles) {
-    await emit({ step: "transcript", status: "loading", message: "Extracting manual subtitles..." });
-
-    const subs = metadata.subtitleLanguage
-      ? await extractSubtitles(url, metadata.subtitleLanguage)
-      : null;
-
-    if (subs) {
-      console.log(`[parse] Got subtitles (${subs.text.length} chars)`);
-      await emit({
-        step: "transcript",
-        status: "done",
-        message: "Manual subtitles extracted.",
-        data: { transcript: subs.text, source: "subtitles" },
-      });
-      return { transcript: subs.text, source: "subtitles", audioCleanup: null, aborted: false };
-    }
-
-    console.log("[parse] Manual subtitle extraction returned nothing, downloading audio...");
-  }
-
-  const downloadMsg = metadata.hasSubtitles
-    ? "Suitable subtitles unavailable, downloading audio..."
-    : "Downloading audio for transcription...";
-  const result = await transcribeViaAudio(url, emit, downloadMsg);
-  return {
-    transcript: result.transcript,
-    source: "audio",
-    audioCleanup: result.cleanup,
-    aborted: false,
-  };
-}
-
-async function stepParsing(
-  metadata: VideoMetadata,
-  transcript: string,
-  translate: boolean,
-  customPrompt: string,
-  url: string,
-  emit: EmitFn,
-): Promise<{ preparedImport: PreparedRecipeImport }> {
-  await emit({ step: "parsing", status: "loading", message: "Generating recipe with AI..." });
-
-  const recipe = await parseRecipeFromTranscript({
-    title: metadata.title,
-    description: metadata.description,
-    transcript,
-    translate,
-    customPrompt: customPrompt || undefined,
-  });
-  const preparedImport = await prepareRecipeImport(recipe, url);
-
-  console.log(
-    `[parse] Recipe parsed: "${recipe.name}" with ${recipe.recipeIngredient.length} ingredients`,
-  );
-
-  await emit({
-    step: "parsing",
-    status: "done",
-    message: `Recipe parsed: ${recipe.name}`,
-    data: {
-      parsedRecipe: recipe,
-      importPayload: preparedImport.payload,
-      ingredientWarnings: preparedImport.ingredientWarnings,
-    },
-  });
-
-  return { preparedImport };
-}
-
-async function stepImporting(
-  preparedImport: PreparedRecipeImport,
-  thumbnailUrl: string | undefined,
-  emit: EmitFn,
-): Promise<{ recipeUrl: string; slug: string }> {
-  await emit({ step: "importing", status: "loading", message: "Importing to Mealie..." });
-
-  const result = await runRecipeImport({ preparedImport, thumbnailUrl });
-  console.log(`[parse] Imported recipe: ${result.recipeUrl}`);
-
-  await emit({
-    step: "importing",
-    status: "done",
-    message: "Recipe imported successfully!",
-    data: { recipeUrl: result.recipeUrl, slug: result.slug },
-  });
-
-  return result;
-}
-
-// -------------------------------------------------------------------------
-// Pipeline runner
-// -------------------------------------------------------------------------
-
-function createEmitter(jobId: string): EmitFn {
-  return async (event: SSEEvent) => {
-    const stepPatch: Partial<StepState> = {
-      status: event.status as StepState["status"],
-      message: event.message ?? event.error ?? "",
-    };
-    jobQueue.updateStep(jobId, event.step as StepName, stepPatch);
-
-    if (event.status === "done" && event.data) {
-      if (event.step === "metadata") {
-        const d = event.data;
-        jobQueue.updateJob(jobId, {
-          recipeTitle: (d.title as string) ?? null,
-          thumbnailUrl: (d.thumbnailUrl as string) ?? null,
-          metadataDetails: {
-            title: d.title as string,
-            uploader: d.uploader as string | undefined,
-            duration: d.duration as number | undefined,
-            description: d.description as string | undefined,
-            webpageUrl: d.webpageUrl as string | undefined,
-            thumbnailSourceUrl: d.thumbnailSourceUrl as string | undefined,
-            hasSubtitles: d.hasSubtitles as boolean | undefined,
-            subtitleLanguage: d.subtitleLanguage as string | undefined,
-          } satisfies JobMetadataDetails,
-        });
-      } else if (event.step === "transcript") {
-        const d = event.data;
-        if (
-          typeof d.transcript === "string" &&
-          (d.source === "subtitles" || d.source === "audio")
-        ) {
-          jobQueue.updateJob(jobId, {
-            transcriptDetails: {
-              transcript: d.transcript,
-              source: d.source,
-            },
-          });
-        }
-      } else if (event.step === "parsing") {
-        const d = event.data;
-        jobQueue.updateJob(jobId, {
-          parsingDetails: {
-            parsedRecipe: d.parsedRecipe,
-            importPayload: d.importPayload,
-            ingredientWarnings: Array.isArray(d.ingredientWarnings)
-              ? d.ingredientWarnings.filter((w): w is string => typeof w === "string")
-              : [],
-          },
-        });
-      } else if (event.step === "importing") {
-        const d = event.data;
-        if (d.recipeUrl) {
-          jobQueue.updateJob(jobId, { recipeUrl: d.recipeUrl as string });
-        }
-      }
-    }
-
-    if (event.status === "error") {
-      jobQueue.updateJob(jobId, { errorMessage: event.error ?? "An unexpected error occurred." });
-    }
-
+function emitFor(jobId: string): Emit {
+  return async (event) => {
+    jobQueue.updateStep(jobId, event.step, { status: event.status, message: event.message ?? event.error ?? "" });
     jobQueue.emit("step", { jobId, ...event });
   };
 }
 
-async function processJob(jobId: string): Promise<void> {
-  const job = jobQueue.getJob(jobId);
-  if (!job) return;
-
-  const emit = createEmitter(jobId);
-
-  let audioCleanup: (() => Promise<void>) | null = null;
-
+async function cacheRemoteImage(job: Job, url: string, label: string): Promise<ManagedAsset | null> {
   try {
-    const metadata = await stepMetadata(job.url, emit);
-
-    if (jobQueue.isCancelled(jobId)) return;
-
-    const transcriptResult = await stepTranscript(job.url, metadata, job.extractTranscript, emit);
-    audioCleanup = transcriptResult.audioCleanup;
-
-    if (transcriptResult.aborted) {
-      const errMsg = job.errorMessage ?? "Not enough context to parse a recipe.";
-      jobQueue.fail(jobId, errMsg);
-      return;
-    }
-
-    if (jobQueue.isCancelled(jobId)) return;
-
-    if (audioCleanup) {
-      await audioCleanup().catch(() => {});
-      audioCleanup = null;
-    }
-
-    const { preparedImport } = await stepParsing(
-      metadata,
-      transcriptResult.transcript,
-      job.translate,
-      job.customPrompt,
-      job.url,
-      emit,
-    );
-
-    if (jobQueue.isCancelled(jobId)) return;
-
-    if (!job.autoImport) {
-      jobQueue.updateStep(jobId, "importing", {
-        status: "idle",
-        message: "Ready to import when you are.",
-      });
-      jobQueue.emit("step", {
-        jobId,
-        step: "importing",
-        status: "idle",
-        message: "Ready to import when you are.",
-      });
-      jobQueue.review(jobId);
-      return;
-    }
-
-    const result = await stepImporting(preparedImport, metadata.thumbnailUrl, emit);
-    jobQueue.complete(jobId, result.recipeUrl);
-  } catch (err) {
-    if (jobQueue.isCancelled(jobId)) return;
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`[parse] Pipeline error for job ${jobId}: ${message}`);
-    jobQueue.fail(jobId, message);
-  } finally {
-    if (audioCleanup) await audioCleanup().catch(() => {});
+    const response = await safeFetchBuffer(url, { maxBytes: 10 * 1024 * 1024, timeoutMs: 10_000, contentTypes: ["image/jpeg", "image/png", "image/webp", "image/gif"] });
+    return await assetManager.saveRemote(job.id, response.buffer, response.contentType, label);
+  } catch (error) {
+    job.warnings.push(`Source image could not be retained: ${error instanceof Error ? error.message : error}`);
+    return null;
   }
 }
 
-jobQueue.setProcessCallback((jobId) => {
-  processJob(jobId).catch((err) => {
-    console.error(`[parse] Unhandled error in job ${jobId}:`, err);
-  });
-});
+async function prepareVideo(job: Job, metadata: VideoMetadata, emit: Emit): Promise<void> {
+  job.resolvedSourceType = "video";
+  const remote = metadata.thumbnailUrl ? await cacheRemoteImage(job, metadata.thumbnailUrl, "video-thumbnail.jpg") : null;
+  if (remote) { job.finalImage.remoteAssetId = remote.id; if (!job.customImage) job.thumbnailUrl = remote.previewUrl; }
+  const details: SourceDetails = { sourceType: "video", title: metadata.title, url: metadata.webpageUrl || (job.source.kind === "url" ? job.source.url : ""), uploader: metadata.uploader, duration: metadata.duration, description: metadata.description, hasSubtitles: metadata.hasSubtitles, subtitleLanguage: metadata.subtitleLanguage ?? undefined, customImage: job.customImage };
+  job.sourceDetails = details; job.recipeTitle = metadata.title;
+  await emit({ step: "source", status: "done", message: `Found video: ${metadata.title}`, data: { sourceDetails: details, recipeTitle: metadata.title, thumbnailUrl: job.thumbnailUrl, resolvedSourceType: "video" } });
 
-// -------------------------------------------------------------------------
-// Routes
-// -------------------------------------------------------------------------
+  let transcript = ""; let source: ExtractedContentDetails["source"] = "subtitles";
+  if (job.extractTranscript) {
+    await emit({ step: "extraction", status: "loading", message: metadata.hasSubtitles ? "Extracting subtitles..." : "Downloading audio for transcription..." });
+    const subtitles = metadata.hasSubtitles && metadata.subtitleLanguage ? await extractSubtitles((job.source as { kind: "url"; url: string }).url, metadata.subtitleLanguage) : null;
+    if (subtitles) transcript = subtitles.text;
+    else {
+      const audio = await downloadAudio((job.source as { kind: "url"; url: string }).url); source = "audio";
+      try { transcript = await transcribeAudio(audio.filePath); }
+      finally { await audio.cleanup().catch(() => {}); }
+    }
+  }
+  const body = assertModelInputLength(`${metadata.description}${transcript ? `\n\nTranscript:\n${transcript}` : ""}`);
+  job.normalizedContext = { kind: "text", sourceType: "video", title: metadata.title, description: metadata.description, body, attributionUrl: metadata.webpageUrl || (job.source as { kind: "url"; url: string }).url, extractionMethod: transcript ? source : "description" };
+  const extracted: ExtractedContentDetails = { content: body, source: transcript ? source : "description" };
+  job.extractedContentDetails = extracted;
+  await emit({ step: "extraction", status: "done", message: transcript ? `${source === "audio" ? "Audio transcribed" : "Subtitles extracted"}.` : "Using video description.", data: { extractedContentDetails: extracted } });
+}
+
+async function prepareUrl(job: Job, emit: Emit): Promise<void> {
+  const url = (job.source as { kind: "url"; url: string }).url;
+  await emit({ step: "source", status: "loading", message: "Checking URL and trying video extraction first..." });
+  await validatePublicUrl(url);
+  let videoError = "";
+  let metadata: VideoMetadata | null = null;
+  try { metadata = await fetchMetadata(url); }
+  catch (error) { videoError = error instanceof Error ? error.message : String(error); }
+  if (metadata) { await prepareVideo(job, metadata, emit); return; }
+  await emit({ step: "source", status: "loading", message: "Not a supported video. Fetching static recipe page..." });
+  try {
+    const page = await extractRecipeWebpage(url); job.resolvedSourceType = "webpage";
+    const remote = page.imageUrl ? await cacheRemoteImage(job, page.imageUrl, "webpage-recipe-image.jpg") : null;
+    if (remote) { job.finalImage.remoteAssetId = remote.id; if (!job.customImage) job.thumbnailUrl = remote.previewUrl; }
+    const details: SourceDetails = { sourceType: "webpage", title: page.title, url: page.canonicalUrl, description: page.description, extractionMethod: page.extractionMethod, selectedRecipe: page.selectedRecipe, customImage: job.customImage };
+    job.sourceDetails = details; job.recipeTitle = page.title;
+    job.normalizedContext = { kind: "text", sourceType: "webpage", title: page.title, description: page.description, body: page.body, attributionUrl: page.canonicalUrl, extractionMethod: page.extractionMethod };
+    job.extractedContentDetails = { content: page.body, source: "webpage" };
+    await emit({ step: "source", status: "done", message: `Found recipe page: ${page.title}`, data: { sourceDetails: details, recipeTitle: page.title, thumbnailUrl: job.thumbnailUrl, resolvedSourceType: "webpage" } });
+    await emit({ step: "extraction", status: "done", message: page.extractionMethod === "json-ld" ? "Schema.org Recipe data extracted." : "Readable page content extracted.", data: { extractedContentDetails: job.extractedContentDetails } });
+  } catch (pageError) {
+    throw new Error(`URL could not be processed as video or recipe page. Video: ${videoError}. Page: ${pageError instanceof Error ? pageError.message : pageError}`);
+  }
+}
+
+async function prepareSource(job: Job, emit: Emit): Promise<void> {
+  if (job.source.kind === "url") return prepareUrl(job, emit);
+  await emit({ step: "source", status: "loading", message: job.source.kind === "text" ? "Preparing pasted recipe text..." : "Validating retained recipe images..." });
+  if (job.source.kind === "text") {
+    const body = assertModelInputLength(job.source.text); job.resolvedSourceType = "text";
+    job.normalizedContext = { kind: "text", sourceType: "text", title: "Pasted recipe", description: "", body, attributionUrl: "", extractionMethod: "pasted-text" };
+    job.sourceDetails = { sourceType: "text", title: "Pasted recipe", textLength: body.length, textPreview: body.slice(0, 500), customImage: job.customImage };
+    job.extractedContentDetails = { content: body, source: "pasted-text" };
+    await emit({ step: "source", status: "done", message: `Prepared ${body.length.toLocaleString()} characters of pasted text.`, data: { sourceDetails: job.sourceDetails, resolvedSourceType: "text" } });
+    await emit({ step: "extraction", status: "done", message: "Pasted recipe text ready.", data: { extractedContentDetails: job.extractedContentDetails } });
+    return;
+  }
+  for (const asset of job.sourceAssets) await assetManager.resolve(job.id, asset.id);
+  job.resolvedSourceType = "images"; job.normalizedContext = { kind: "images", assets: job.sourceAssets };
+  job.sourceDetails = { sourceType: "images", title: `${job.sourceAssets.length} recipe image${job.sourceAssets.length === 1 ? "" : "s"}`, imageCount: job.sourceAssets.length, images: job.sourceAssets, customImage: job.customImage };
+  job.thumbnailUrl = job.customImage?.previewUrl ?? job.sourceAssets[0]?.previewUrl ?? null;
+  job.extractedContentDetails = { content: `${job.sourceAssets.length} ordered recipe images retained for vision analysis.`, source: "images" };
+  await emit({ step: "source", status: "done", message: `${job.sourceAssets.length} recipe image${job.sourceAssets.length === 1 ? "" : "s"} ready.`, data: { sourceDetails: job.sourceDetails, thumbnailUrl: job.thumbnailUrl, resolvedSourceType: "images" } });
+  await emit({ step: "extraction", status: "done", message: "Images ready for vision analysis.", data: { extractedContentDetails: job.extractedContentDetails } });
+}
+
+async function generate(job: Job, emit: Emit): Promise<void> {
+  if (!job.normalizedContext) throw new Error("Prepared source context is missing.");
+  await emit({ step: "generation", status: "loading", message: job.resolvedSourceType === "images" ? "Reading images and generating recipe with AI..." : "Generating recipe with AI..." });
+  let generated;
+  try { generated = await parseRecipeSource({ jobId: job.id, context: job.normalizedContext, customPrompt: job.customPrompt || undefined }); }
+  catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const looksLikeVisionCapabilityError = /(?:support[^.]*(?:image|vision|multimodal)|(?:image|vision|multimodal)[^.]*support|image_url)/i.test(message);
+    if (job.resolvedSourceType === "images" && !(error instanceof IncompleteRecipeError) && looksLikeVisionCapabilityError) throw new Error(`The configured OPENAI_MODEL may not support image input: ${message}`);
+    throw error;
+  }
+  const orgUrl = job.normalizedContext.kind === "text" && (job.resolvedSourceType === "video" || job.resolvedSourceType === "webpage") ? job.normalizedContext.attributionUrl : "";
+  job.preparedImport = await prepareRecipeImport(generated.recipe, orgUrl);
+  if (job.resolvedSourceType === "images") {
+    const index = generated.preferredSourceImageIndex ?? 0; const selected = job.sourceAssets[index] ?? job.sourceAssets[0];
+    job.finalImage.selectedSourceIndex = index; job.finalImage.sourceAssetId = selected?.id;
+    if (job.sourceDetails) job.sourceDetails.selectedImageIndex = index;
+    if (!job.customImage && selected) job.thumbnailUrl = selected.previewUrl;
+  }
+  job.recipeTitle = generated.recipe.name;
+  job.parsingDetails = { parsedRecipe: generated.recipe, importPayload: job.preparedImport.payload, ingredientWarnings: job.preparedImport.ingredientWarnings };
+  await emit({ step: "generation", status: "done", message: `Recipe generated: ${generated.recipe.name}`, data: { parsingDetails: job.parsingDetails, recipeTitle: generated.recipe.name, sourceDetails: job.sourceDetails, thumbnailUrl: job.thumbnailUrl } });
+}
+
+async function importPrepared(job: Job, emit: Emit): Promise<{ recipeUrl: string }> {
+  if (!job.preparedImport) throw new Error("Prepared recipe is missing. Generate it again.");
+  await emit({ step: "importing", status: "loading", message: "Importing to Mealie..." });
+  const ids = [job.finalImage.customAssetId, job.finalImage.sourceAssetId ?? job.finalImage.remoteAssetId].filter((id, index, all): id is string => Boolean(id) && all.indexOf(id) === index);
+  const paths: string[] = [];
+  for (const id of ids) { try { paths.push((await assetManager.resolve(job.id, id)).path); } catch (error) { job.warnings.push(`Image is no longer available: ${error instanceof Error ? error.message : error}`); } }
+  const result = await importRecipe({ preparedImport: job.preparedImport, imageFilePaths: paths });
+  job.warnings.push(...result.warnings); job.finalImage.warnings.push(...result.warnings);
+  await emit({ step: "importing", status: "done", message: result.warnings.length ? "Recipe imported with image warnings." : "Recipe imported successfully!", data: { recipeUrl: result.recipeUrl, warnings: job.warnings } });
+  return result;
+}
+
+async function finishAfterGeneration(job: Job, emit: Emit): Promise<void> {
+  if (!job.autoImport) { await emit({ step: "importing", status: "idle", message: "Ready to import when you are." }); jobQueue.review(job.id); return; }
+  if (!jobQueue.beginImport(job.id)) throw new Error("Recipe import is already running or no longer available.");
+  try { const result = await importPrepared(job, emit); jobQueue.complete(job.id, result.recipeUrl); }
+  finally { jobQueue.endImport(job.id); }
+}
+
+async function processJob(jobId: string): Promise<void> {
+  const job = jobQueue.getJob(jobId); if (!job) return; const emit = emitFor(jobId);
+  try { await prepareSource(job, emit); if (jobQueue.isCancelled(jobId)) return; await generate(job, emit); if (jobQueue.isCancelled(jobId)) return; await finishAfterGeneration(job, emit); }
+  catch (error) { if (jobQueue.isCancelled(jobId)) return; const message = error instanceof Error ? error.message : String(error); const step = job.steps.importing.status === "loading" ? "importing" : job.steps.extraction.status === "loading" ? "extraction" : job.normalizedContext ? "generation" : "source"; await emit({ step, status: "error", error: message }); jobQueue.fail(jobId, message); }
+}
+
+jobQueue.setProcessCallback((jobId) => void processJob(jobId));
+jobQueue.setCleanupCallback((jobId) => assetManager.cleanupJob(jobId));
+
+function field(body: Record<string, string | File | (string | File)[]>, name: string): string {
+  const value = body[name]; if (Array.isArray(value)) { if (value.length !== 1 || typeof value[0] !== "string") throw new Error(`Invalid multipart field: ${name}.`); return value[0]; }
+  return typeof value === "string" ? value : "";
+}
+function files(body: Record<string, string | File | (string | File)[]>, name: string): File[] { const value = body[name]; return (Array.isArray(value) ? value : value ? [value] : []).filter((item): item is File => item instanceof File); }
+function bool(value: string, defaultValue: boolean): boolean { if (!value) return defaultValue; if (value === "true") return true; if (value === "false") return false; throw new Error("Boolean form fields must be true or false."); }
+function safeJobId(value: string): string { const id = value || crypto.randomUUID(); if (!/^[a-zA-Z0-9_-]{8,128}$/.test(id)) throw new Error("Invalid job identifier."); return id; }
 
 export const parseRouter = new Hono();
+parseRouter.get("/api/assets/:jobId/:assetId", async (c) => {
+  try { const job = jobQueue.getJob(c.req.param("jobId")); if (!job) return c.json({ error: "Job not found." }, 404); const asset = await assetManager.resolve(job.id, c.req.param("assetId")); c.header("Content-Type", asset.contentType); c.header("X-Content-Type-Options", "nosniff"); c.header("Cache-Control", "private, no-store"); return c.body(await readFile(asset.path)); }
+  catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 404); }
+});
 
-parseRouter.get("/api/thumbnail", async (c) => {
-  const thumbnailUrl = c.req.query("url");
-
-  if (!thumbnailUrl) {
-    return c.json({ error: "Missing required query parameter: url" }, 400);
-  }
-
-  let parsedUrl: URL;
+parseRouter.post("/api/parse", bodyLimit({ maxSize: MAX_MULTIPART_BYTES, onError: (c) => c.json({ error: "Upload request exceeds the allowed size." }, 413) }), async (c) => {
+  let jobId = "";
   try {
-    parsedUrl = new URL(thumbnailUrl);
-  } catch {
-    return c.json({ error: "Invalid thumbnail URL" }, 400);
-  }
-
-  if (parsedUrl.protocol !== "https:" && parsedUrl.protocol !== "http:") {
-    return c.json({ error: "Unsupported thumbnail URL protocol" }, 400);
-  }
-
-  const response = await fetch(parsedUrl.toString());
-  if (!response.ok) {
-    return c.json(
-      { error: `Failed to fetch thumbnail: ${response.status} ${response.statusText}` },
-      502,
-    );
-  }
-
-  const image = await response.arrayBuffer();
-  const contentType = response.headers.get("content-type") ?? "image/jpeg";
-
-  c.header("Content-Type", contentType);
-  c.header("Cache-Control", "public, max-age=1800");
-  return c.body(image);
-});
-
-parseRouter.post("/api/parse", async (c) => {
-  let body: unknown;
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json({ error: "Invalid JSON body" }, 400);
-  }
-
-  if (typeof body !== "object" || body === null) {
-    return c.json({ error: "Invalid request body" }, 400);
-  }
-
-  const url = typeof (body as Record<string, unknown>).url === "string" ? ((body as Record<string, unknown>).url as string).trim() : "";
-  const translate = (body as Record<string, unknown>).translate === true;
-  const extractTranscript = (body as Record<string, unknown>).extractTranscript !== false;
-  const autoImport = (body as Record<string, unknown>).autoImport !== false;
-  const customPrompt = typeof (body as Record<string, unknown>).customPrompt === "string" ? ((body as Record<string, unknown>).customPrompt as string).trim() : "";
-  const jobId = typeof (body as Record<string, unknown>).jobId === "string" ? ((body as Record<string, unknown>).jobId as string) : crypto.randomUUID();
-
-  if (!url) {
-    return c.json({ error: "Missing required field: url" }, 400);
-  }
-
-  if (customPrompt.length > CUSTOM_PROMPT_MAX_LENGTH) {
-    return c.json(
-      { error: `Custom prompt is too long. Keep it under ${CUSTOM_PROMPT_MAX_LENGTH} characters.` },
-      400,
-    );
-  }
-
-  const job = jobQueue.add({
-    id: jobId,
-    url,
-    translate,
-    extractTranscript,
-    autoImport,
-    customPrompt,
-  });
-
-  return c.json({ jobId: job.id });
-});
-
-parseRouter.get("/api/queue", async (c) => {
-  const snapshot = jobQueue.getSnapshot();
-  return c.json(snapshot);
-});
-
-parseRouter.get("/api/queue/stream", async (c) => {
-  return streamSSE(c, async (stream) => {
-    const handlers: Record<string, (...args: unknown[]) => void> = {};
-
-    handlers["job:added"] = (job: unknown) => {
-      stream.writeSSE({ event: "job-added", data: JSON.stringify(job) }).catch(() => {});
-    };
-
-    handlers["job:start"] = (jobId: unknown) => {
-      stream.writeSSE({ event: "job-start", data: JSON.stringify({ jobId }) }).catch(() => {});
-    };
-
-    handlers["job:position"] = (data: unknown) => {
-      stream.writeSSE({ event: "job-position", data: JSON.stringify(data) }).catch(() => {});
-    };
-
-    handlers["job:cancelled"] = (jobId: unknown) => {
-      stream.writeSSE({ event: "job-cancelled", data: JSON.stringify({ jobId }) }).catch(() => {});
-    };
-
-    handlers["job:removed"] = (jobId: unknown) => {
-      stream.writeSSE({ event: "job-removed", data: JSON.stringify({ jobId }) }).catch(() => {});
-    };
-
-    handlers["job:done"] = (data: unknown) => {
-      stream.writeSSE({ event: "job-done", data: JSON.stringify(data) }).catch(() => {});
-    };
-
-    handlers["job:review"] = (jobId: unknown) => {
-      stream.writeSSE({ event: "job-review", data: JSON.stringify({ jobId }) }).catch(() => {});
-    };
-
-    handlers["job:error"] = (data: unknown) => {
-      stream.writeSSE({ event: "job-error", data: JSON.stringify(data) }).catch(() => {});
-    };
-
-    handlers["step"] = (data: unknown) => {
-      stream.writeSSE({ event: "step", data: JSON.stringify(data) }).catch(() => {});
-    };
-
-    handlers["job:update"] = (jobId: unknown) => {
-      stream.writeSSE({ event: "job-update", data: JSON.stringify(jobId) }).catch(() => {});
-    };
-
-    for (const [event, handler] of Object.entries(handlers)) {
-      jobQueue.on(event, handler);
+    const contentType = c.req.header("content-type") ?? "";
+    if (contentType.includes("application/json")) {
+      const raw = await c.req.json<Record<string, unknown>>(); const url = typeof raw.url === "string" ? raw.url.trim() : "";
+      if (!url) return c.json({ error: "Missing required field: url" }, 400); jobId = safeJobId(typeof raw.jobId === "string" ? raw.jobId : "");
+      if (!isExactHttpUrl(url)) return c.json({ error: "URL must be one complete HTTP or HTTPS URL." }, 400);
+      const customPrompt = typeof raw.customPrompt === "string" ? raw.customPrompt.trim() : ""; if (customPrompt.length > MAX_CUSTOM_PROMPT_CHARS) return c.json({ error: "Custom prompt is too long." }, 400);
+      const job = jobQueue.add({ id: jobId, source: { kind: "url", url }, displayLabel: url, sourceAssets: [], customImage: null, extractTranscript: raw.extractTranscript !== false, autoImport: raw.autoImport !== false, customPrompt });
+      return c.json({ jobId: job.id });
     }
-
-    const keepalive = setInterval(() => {
-      stream.writeSSE({ data: "" }).catch(() => {});
-    }, 25000);
-
-    await new Promise<void>((resolve) => {
-      const abortHandler = () => {
-        clearInterval(keepalive);
-        for (const [event, handler] of Object.entries(handlers)) {
-          jobQueue.off(event, handler);
-        }
-        c.req.raw.signal.removeEventListener("abort", abortHandler);
-        resolve();
-      };
-      c.req.raw.signal.addEventListener("abort", abortHandler);
-    });
-  });
+    if (!contentType.includes("multipart/form-data")) return c.json({ error: "Use JSON or multipart form data." }, 415);
+    const body = await c.req.parseBody({ all: true }) as Record<string, string | File | (string | File)[]>;
+    jobId = safeJobId(field(body, "jobId")); const kind = field(body, "kind"); const value = field(body, "value").trim();
+    const customPrompt = field(body, "customPrompt").trim(); if (customPrompt.length > MAX_CUSTOM_PROMPT_CHARS) throw new Error("Custom prompt is too long.");
+    const sourceFiles = files(body, "sourceImages"); const customFiles = files(body, "customImage");
+    if (!['url', 'text', 'images'].includes(kind)) throw new Error("Invalid input kind.");
+    if ((kind === "images" && value) || (kind !== "images" && sourceFiles.length)) throw new Error("A job must contain exactly one recipe source type.");
+    if (kind !== "images" && !value) throw new Error("Recipe source is empty.");
+    let sourceAssets: ManagedAsset[] = []; let customImage: ManagedAsset | null = null;
+    if (sourceFiles.length) sourceAssets = await assetManager.saveUploads(jobId, sourceFiles, "source");
+    if (customFiles.length) customImage = (await assetManager.saveUploads(jobId, customFiles, "custom"))[0] ?? null;
+    let source: SubmittedSource;
+    if (kind === "url") { if (!isExactHttpUrl(value)) throw new Error("URL must be one complete HTTP or HTTPS URL."); source = { kind: "url", url: value }; } else if (kind === "text") { const text = assertModelInputLength(value); buildTextModelInput({ sourceType: "text", title: "Pasted recipe", description: "", body: text, attributionUrl: "", extractionMethod: "pasted-text", customPrompt }); source = { kind: "text", text }; } else { if (!sourceAssets.length) throw new Error("Choose at least one source image."); source = { kind: "images", assetIds: sourceAssets.map((asset) => asset.id) }; }
+    const displayLabel = source.kind === "url" ? source.url : source.kind === "text" ? source.text.slice(0, 80) : `${sourceAssets.length} recipe image${sourceAssets.length === 1 ? "" : "s"}`;
+    const job = jobQueue.add({ id: jobId, source, displayLabel, sourceAssets, customImage, extractTranscript: bool(field(body, "extractTranscript"), true), autoImport: bool(field(body, "autoImport"), true), customPrompt });
+    return c.json({ jobId: job.id });
+  } catch (error) { if (jobId && !jobQueue.getJob(jobId)) await assetManager.cleanupJob(jobId).catch(() => {}); return c.json({ error: error instanceof Error ? error.message : String(error) }, 400); }
 });
 
-parseRouter.patch("/api/queue/:jobId", async (c) => {
-  const jobId = c.req.param("jobId");
-  let body: unknown;
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json({ error: "Invalid JSON body" }, 400);
-  }
+parseRouter.get("/api/queue", (c) => c.json(jobQueue.getSnapshot()));
+parseRouter.get("/api/queue/stream", (c) => streamSSE(c, async (stream) => {
+  const mapping: Record<string, string> = { "job:added": "job-added", "job:start": "job-start", "job:position": "job-position", "job:cancelled": "job-cancelled", "job:removed": "job-removed", "job:done": "job-done", "job:review": "job-review", "job:error": "job-error", "job:update": "job-update", step: "step" };
+  const handlers = new Map<string, (...args: unknown[]) => void>();
+  for (const [internal, external] of Object.entries(mapping)) { const handler = (data: unknown) => { const payload = ["job:start", "job:cancelled", "job:removed", "job:review"].includes(internal) ? { jobId: data } : data; void stream.writeSSE({ event: external, data: JSON.stringify(payload) }); }; handlers.set(internal, handler); jobQueue.on(internal, handler); }
+  const keepalive = setInterval(() => void stream.writeSSE({ data: "" }), 25_000);
+  await new Promise<void>((resolve) => c.req.raw.signal.addEventListener("abort", () => { clearInterval(keepalive); for (const [event, handler] of handlers) jobQueue.off(event, handler); resolve(); }, { once: true }));
+}));
 
-  if (typeof body !== "object" || body === null) {
-    return c.json({ error: "Invalid request body" }, 400);
-  }
+parseRouter.patch("/api/queue/:jobId", async (c) => { const job = jobQueue.getJob(c.req.param("jobId")); if (!job) return c.json({ error: "Job not found." }, 404); const body = await c.req.json<{ autoImport?: boolean }>(); if (typeof body.autoImport === "boolean") { job.autoImport = body.autoImport; jobQueue.emit("job:update", job.id); } return c.json({ success: true, autoImport: job.autoImport }); });
+parseRouter.delete("/api/queue/:jobId", (c) => { const job = jobQueue.getJob(c.req.param("jobId")); if (!job) return c.json({ error: "Job not found." }, 404); const ok = job.status === "queued" || job.status === "active" ? jobQueue.cancel(job.id) : jobQueue.remove(job.id); return ok ? c.json({ success: true }) : c.json({ error: "Job could not be removed." }, 409); });
 
-  const job = jobQueue.getJob(jobId);
-  if (!job) {
-    return c.json({ error: "Job not found." }, 404);
-  }
-
-  const newAutoImport = (body as Record<string, unknown>).autoImport;
-  if (typeof newAutoImport === "boolean") {
-    jobQueue.updateJob(jobId, { autoImport: newAutoImport });
-    jobQueue.emit("job:update", jobId);
-  }
-
-  return c.json({ success: true, jobId, autoImport: newAutoImport ?? job.autoImport });
-});
-
-parseRouter.delete("/api/queue/:jobId", async (c) => {
-  const jobId = c.req.param("jobId");
-  const job = jobQueue.getJob(jobId);
-
-  if (!job) {
-    return c.json({ error: "Job not found." }, 404);
-  }
-
-  if (job.status === "queued" || job.status === "active") {
-    const cancelled = jobQueue.cancel(jobId);
-    if (!cancelled) {
-      return c.json({ error: "Failed to cancel job." }, 500);
-    }
-    return c.json({ success: true, jobId });
-  }
-
-  const removed = jobQueue.remove(jobId);
-  if (!removed) {
-    return c.json({ error: "Failed to remove job." }, 500);
-  }
-  return c.json({ success: true, jobId });
-});
-
-parseRouter.post("/api/import", async (c) => {
-  let body: unknown;
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json({ error: "Invalid JSON body" }, 400);
-  }
-
-  if (typeof body !== "object" || body === null) {
-    return c.json({ error: "Invalid request body" }, 400);
-  }
-
-  const payload = (body as Record<string, unknown>).importPayload;
-  if (typeof payload !== "object" || payload === null) {
-    return c.json({ error: "Missing importPayload" }, 400);
-  }
-
-  const ingredientWarnings = Array.isArray((body as Record<string, unknown>).ingredientWarnings)
-    ? ((body as Record<string, unknown>).ingredientWarnings as unknown[]).filter(
-        (warning): warning is string => typeof warning === "string",
-      )
-    : [];
-  const thumbnailUrl =
-    typeof (body as Record<string, unknown>).thumbnailUrl === "string"
-      ? ((body as Record<string, unknown>).thumbnailUrl as string)
-      : undefined;
-
-  const jobId = typeof (body as Record<string, unknown>).jobId === "string"
-    ? ((body as Record<string, unknown>).jobId as string)
-    : undefined;
-
-  if (jobId) {
-    jobQueue.updateStep(jobId, "importing", { status: "loading", message: "Importing to Mealie..." });
-    jobQueue.emit("step", {
-      jobId,
-      step: "importing",
-      status: "loading",
-      message: "Importing to Mealie...",
-    });
-  }
-
-  try {
-    const result = await runRecipeImport({
-      preparedImport: {
-        payload: payload as RecipeImportPayload,
-        ingredientWarnings,
-      },
-      thumbnailUrl,
-    });
-
-    if (jobId) {
-      jobQueue.updateStep(jobId, "importing", {
-        status: "done",
-        message: "Recipe imported successfully!",
-      });
-      jobQueue.updateJob(jobId, { recipeUrl: result.recipeUrl });
-      jobQueue.emit("step", {
-        jobId,
-        step: "importing",
-        status: "done",
-        message: "Recipe imported successfully!",
-        data: { recipeUrl: result.recipeUrl, slug: result.slug },
-      });
-      jobQueue.emit("job:done", { jobId, recipeUrl: result.recipeUrl });
-    }
-
-    return c.json({
-      recipeUrl: result.recipeUrl,
-      slug: result.slug,
-    });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`[parse] Manual import error: ${message}`);
-
-    if (jobId) {
-      jobQueue.updateStep(jobId, "importing", { status: "error", message });
-      jobQueue.updateJob(jobId, { errorMessage: message });
-      jobQueue.emit("step", {
-        jobId,
-        step: "importing",
-        status: "error",
-        error: message,
-      });
-    }
-
-    return c.json({ error: message }, 500);
-  }
+parseRouter.post("/api/import/:jobId", async (c) => {
+  const job = jobQueue.getJob(c.req.param("jobId")); if (!job) return c.json({ error: "Job not found." }, 404); if (!job.preparedImport) return c.json({ error: "Job has no prepared recipe to import." }, 400);
+  if (!jobQueue.beginImport(job.id)) return c.json({ error: "Recipe import is already running or has already completed." }, 409);
+  try { const result = await importPrepared(job, emitFor(job.id)); jobQueue.complete(job.id, result.recipeUrl); return c.json({ recipeUrl: result.recipeUrl }); }
+  catch (error) { const message = error instanceof Error ? error.message : String(error); await emitFor(job.id)({ step: "importing", status: "error", error: message }); return c.json({ error: message }, 500); }
+  finally { jobQueue.endImport(job.id); }
 });
 
 parseRouter.post("/api/reprompt/:jobId", async (c) => {
-  const jobId = c.req.param("jobId");
-  const job = jobQueue.getJob(jobId);
-
-  if (!job) {
-    return c.json({ error: "Job not found." }, 404);
-  }
-
-  if (!job.metadataDetails || !job.transcriptDetails) {
-    return c.json({ error: "Job does not have cached metadata or transcript for reprompting." }, 400);
-  }
-
-  if (job.status !== "done" && job.status !== "error") {
-    return c.json({ error: "Job is not in a state that allows reprompting." }, 400);
-  }
-
-  if (jobQueue.getActiveJobId() !== null) {
-    return c.json({ error: "Another job is currently processing. Please wait and try again." }, 409);
-  }
-
-  let body: unknown;
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json({ error: "Invalid JSON body." }, 400);
-  }
-
-  const customPrompt = typeof (body as Record<string, unknown>).customPrompt === "string"
-    ? ((body as Record<string, unknown>).customPrompt as string).trim()
-    : "";
-
-  if (customPrompt.length > CUSTOM_PROMPT_MAX_LENGTH) {
-    return c.json(
-      { error: `Custom prompt is too long. Keep it under ${CUSTOM_PROMPT_MAX_LENGTH} characters.` },
-      400,
-    );
-  }
-
-  const ok = jobQueue.reprompt(jobId, customPrompt);
-  if (!ok) {
-    return c.json({ error: "Failed to reprompt job." }, 500);
-  }
-
-  const metadata: VideoMetadata = {
-    title: job.metadataDetails.title,
-    description: job.metadataDetails.description ?? "",
-    thumbnailUrl: job.metadataDetails.thumbnailSourceUrl ?? "",
-    duration: job.metadataDetails.duration ?? 0,
-    uploader: job.metadataDetails.uploader ?? "",
-    webpageUrl: job.metadataDetails.webpageUrl ?? "",
-    hasSubtitles: job.metadataDetails.hasSubtitles ?? false,
-    subtitleLanguage: job.metadataDetails.subtitleLanguage ?? null,
-  };
-
-  const emit = createEmitter(jobId);
-
-  process.nextTick(async () => {
-    try {
-      const { preparedImport } = await stepParsing(
-        metadata,
-        job.transcriptDetails!.transcript,
-        job.translate,
-        customPrompt,
-        job.url,
-        emit,
-      );
-
-      if (jobQueue.isCancelled(jobId)) return;
-
-      if (!job.autoImport) {
-        jobQueue.updateStep(jobId, "importing", {
-          status: "idle",
-          message: "Ready to import when you are.",
-        });
-        jobQueue.emit("step", {
-          jobId,
-          step: "importing",
-          status: "idle",
-          message: "Ready to import when you are.",
-        });
-        jobQueue.review(jobId);
-        return;
-      }
-
-      const result = await stepImporting(preparedImport, metadata.thumbnailUrl, emit);
-      jobQueue.complete(jobId, result.recipeUrl);
-    } catch (err) {
-      if (jobQueue.isCancelled(jobId)) return;
-      const message = err instanceof Error ? err.message : String(err);
-      console.error(`[parse] Reprompt error for job ${jobId}: ${message}`);
-      jobQueue.fail(jobId, message);
-    }
-  });
-
+  const jobId = c.req.param("jobId"); const body: { customPrompt?: string } = await c.req.json<{ customPrompt?: string }>().catch(() => ({})); const customPrompt = body.customPrompt?.trim() ?? "";
+  if (customPrompt.length > MAX_CUSTOM_PROMPT_CHARS) return c.json({ error: "Custom prompt is too long." }, 400);
+  if (!jobQueue.reprompt(jobId, customPrompt)) return c.json({ error: "Job cannot be reprompted or another job is active." }, 409);
+  const job = jobQueue.getJob(jobId)!; process.nextTick(async () => { try { await generate(job, emitFor(jobId)); if (!jobQueue.isCancelled(jobId)) await finishAfterGeneration(job, emitFor(jobId)); } catch (error) { if (!jobQueue.isCancelled(jobId)) { const message = error instanceof Error ? error.message : String(error); const step = job.steps.importing.status === "loading" ? "importing" : "generation"; await emitFor(jobId)({ step, status: "error", error: message }); jobQueue.fail(jobId, message); } } });
   return c.json({ success: true, jobId });
 });

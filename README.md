@@ -1,8 +1,8 @@
 # ReelMeal
 
-Turn YouTube, Instagram, and TikTok cooking videos into Mealie recipes.
+Turn videos, recipe webpages, pasted text, and recipe images into Mealie recipes.
 
-Paste a link, let ReelMeal pull the metadata and transcript, then send the cleaned-up recipe straight into your Mealie instance.
+Paste a URL or recipe, add images, review the generated recipe, then send it to Mealie.
 
 ## Screenshots
 
@@ -28,11 +28,14 @@ Paste a link, let ReelMeal pull the metadata and transcript, then send the clean
 
 ## What it does
 
-- pulls title, description, thumbnail, and transcript from supported video links
+- accepts one exact HTTP(S) URL, pasted recipe text, or an ordered image set
+- tries video extraction first for URLs, then static Schema.org Recipe data and readable webpage content
+- accepts images from the picker, drag and drop, clipboard paste, and supported PWA share sheets
 - parses the result into a structured recipe with an LLM
-- optionally translates to English
+- keeps the source language by default; request a translation through the custom prompt
 - optionally imports the recipe directly into Mealie
 - lets you add a short custom parser prompt per run
+- supports a separate custom Mealie cover that is never sent to the recipe model
 
 ## Stack
 
@@ -48,7 +51,7 @@ Paste a link, let ReelMeal pull the metadata and transcript, then send the clean
 - `ffmpeg`
 - `yt-dlp`
 - a Mealie instance
-- an OpenAI-compatible API key
+- an OpenAI-compatible API key and a configured `OPENAI_MODEL` that supports image input
 
 ## Quick start
 
@@ -64,9 +67,21 @@ Open:
 - frontend: `http://localhost:5173`
 - backend: `http://localhost:3000`
 
+## Inputs and limits
+
+The smart input classifies trimmed content as a URL only when the complete value is one HTTP(S) URL. Prose containing a URL is treated as pasted text. A job cannot mix recipe source types.
+
+- Pasted or extracted model input: 100,000 normalized characters. Oversized content is rejected, not truncated.
+- Source images: JPEG, PNG, WebP, or GIF; up to 10 files, 10 MB each, and 50 MB combined.
+- Custom final image: one additional supported image up to 10 MB.
+- Cover priority: custom image, model-selected source image, video thumbnail or webpage image, then no image.
+- GIF originals are retained for Mealie. Provider support for animated GIF analysis varies.
+
+Recipe pages must be public and server rendered. JavaScript-only, paywalled, and login-only pages are not supported.
+
 ## Sharing to the app
 
-ReelMeal can prefill the URL input from a query param:
+ReelMeal can prefill the smart input from a query parameter:
 
 ```text
 https://your-domain.com/?url=<url-encoded-video-link>
@@ -74,7 +89,7 @@ https://your-domain.com/?url=<url-encoded-video-link>
 
 This is useful for mobile sharing flows.
 
-- Android: when ReelMeal is installed as a PWA, it can appear in the system share sheet and receive shared links directly.
+- Android and other supporting platforms: the installed PWA can receive URLs, text, and image files. Shared content is stored briefly and prefills the form, but is never submitted automatically.
 - iPhone/iPad: iOS does not offer the same PWA share target support, but you can use a Shortcut that opens ReelMeal with the shared link in `?url=`.
 
 iOS Shortcut:
@@ -161,10 +176,21 @@ npm start
 - Instagram reels and posts
 - TikTok
 - other sites supported by `yt-dlp`
+- public static recipe pages with Schema.org Recipe JSON-LD or readable content
+- pasted complete recipes
+- JPEG, PNG, WebP, and GIF recipe images
+
+## Storage and security
+
+The queue is held in memory and does not survive a server restart. Upload-backed completed and failed jobs retain files for 24 hours to support review and reprompting. Cancelling or manually removing a job deletes its files immediately. Startup removes stale temporary directories.
+
+Remote HTML and images use protocol, DNS, redirect, content-type, timeout, and byte-limit checks to reduce SSRF risk. The initial video URL receives the same validation. Extractor-specific secondary requests made by `yt-dlp` are outside application-level redirect control; deployment-level egress filtering is required for complete isolation.
+
+ReelMeal has no built-in authentication or rate limiting. Do not expose it to untrusted users without an authenticated reverse proxy or a private network.
 
 ## Todo
 
 - [x] Video queuing
 - [x] Reprompt the model for changes when auto-import is off
-- [ ] Support images, recipe page links, and pasted text as recipe inputs
+- [x] Support images, recipe page links, and pasted text as recipe inputs
 - [ ] Options/settings panel (in-app UI) instead of editing `.env` manually

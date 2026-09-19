@@ -51,16 +51,6 @@ function JobStatusBadge({ phase }: { phase: JobState["phase"] }) {
   }
 }
 
-function trimUrl(url: string): string {
-  try {
-    const u = new URL(url);
-    const path = u.pathname === "/" ? "" : u.pathname.length > 30 ? u.pathname.slice(0, 27) + "..." : u.pathname;
-    return u.hostname + path;
-  } catch {
-    return url.length > 40 ? url.slice(0, 37) + "..." : url;
-  }
-}
-
 function QueueItem({
   job,
   isSelected,
@@ -81,7 +71,7 @@ function QueueItem({
   const canCancel = job.phase === "queued" || job.phase === "loading" || job.phase === "review";
   const showAutoImportToggle = job.phase === "queued" || job.phase === "loading";
   const isDone = job.phase === "done" || job.phase === "error" || job.phase === "cancelled";
-  const title = job.recipeTitle || trimUrl(job.url);
+  const title = job.recipeTitle || job.displayLabel;
 
   return (
     <div
@@ -122,7 +112,7 @@ function QueueItem({
           )}
           {job.phase === "loading" && (
             <p className="m-0 mt-0.5 text-[0.72rem] font-600 text-[#5b5b5b]">
-              {job.steps.metadata?.message || "Starting..."}
+              {(Object.values(job.steps).find((step) => step.status === "loading")?.message) || "Starting..."}
             </p>
           )}
           {job.phase === "error" && job.errorMessage && (

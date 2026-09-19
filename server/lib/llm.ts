@@ -1,5 +1,10 @@
 import OpenAI from "openai";
+import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { config } from "./config.js";
+import { buildTextModelInput, MAX_MODEL_INPUT_CHARS } from "./input.js";
+import type { NormalizedSourceContext } from "./queue.js";
+import { assetManager } from "./assets.js";
+import { IncompleteRecipeError, isRetryableGenerationError } from "./generation-errors.js";
 
 // -------------------------------------------------------------------------
 // Mealie recipe schema types (subset used for generation)
@@ -51,13 +56,18 @@ export interface ParsedRecipe {
   nutrition?: RecipeNutrition;
 }
 
+// Thrown when the source does not contain a complete, usable recipe. Kept
+// separate from provider/API failures so callers do not mistake it for a
+// model-capability error.
+export { IncompleteRecipeError } from "./generation-errors.js";
+
 // -------------------------------------------------------------------------
 // System prompt
 // -------------------------------------------------------------------------
 
 const SYSTEM_PROMPT_TEMPLATE = `You are a culinary assistant that converts recipe content into structured JSON.
 
-Given a video title, description, and transcript, extract the recipe and output a valid JSON object following the schema below. Output ONLY the JSON object — no markdown fences, no explanation.
+Given source recipe content from a video, webpage, pasted text, or ordered image set, extract one complete recipe and output a valid JSON object. Output ONLY the JSON object, with no markdown fences or explanation. If the source does not contain both usable ingredients and usable instructions, output {"noRecipe":true,"reason":"brief explanation in English"}. Never invent a missing half of a recipe.
 
 Schema:
 {
@@ -93,14 +103,16 @@ Schema:
     "fiberContent": "string or null",
     "sugarContent": "string or null",
     "sodiumContent": "string or null"
-  }
+  },
+  "preferredSourceImageIndex": "zero-based integer for image sources only"
 }
 
 Rules:
 - Use human-readable duration strings for times, such as "15 minutes", "35 min", or "1 hour 30 minutes".
 - If a value is not mentioned, use null (not empty string, not 0).
 - Only include recipeServings if the source EXPLICITLY states servings. Do not infer it.
-- Never translate, localize, or rewrite the recipe into another language unless the LANGUAGE rule below explicitly tells you to do so.
+- Preserve the original language of the recipe unless the Additional User Instructions explicitly request a translation.
+- If you return {"noRecipe":true}, write the reason in English regardless of the source language.
 - Prefer fewer, more meaningful instruction steps over many tiny ones.
   - Combine consecutive actions that naturally belong together in real cooking.
   - Usually a normal recipe should land around 6-10 steps, but adapt to recipe complexity.
@@ -108,7 +120,7 @@ Rules:
   - Keep a separate step only when the transition is meaningfully distinct in the source.
 - Choose appropriate categories (e.g. "Dinner", "Breakfast", "Dessert", "Soup") and tags (e.g. "Italian", "Vegetarian", "Quick", "Gluten-Free").
 - If nutrition info is not explicitly mentioned, omit the nutrition field entirely.
-- The transcript may be noisy — use the description and title to fill gaps.
+- Source content may be noisy. Normalize explicit information, but do not fabricate missing ingredients or instructions.
 
 Grouping rules:
 - Create ingredient or instruction section titles ONLY when the source explicitly names distinct recipe components or phases, such as "Poolish", "Dough", "Sauce", "Filling", "Meat", or "Assembly".
@@ -148,14 +160,10 @@ Ingredient parsing rules — these are CRITICAL for correct import:
 - LANGUAGE: {{LANGUAGE_RULE}}`;
 
 const LANGUAGE_RULE_KEEP =
-  "Keep ALL text in the original language of the recipe, including name, description, ingredients, units, notes, instructions, categories, and tags. Do NOT translate, localize, or normalize text into another language.";
+  "Keep ALL text in the original language of the recipe, including name, description, ingredients, units, notes, instructions, categories, and tags, unless the Additional User Instructions explicitly request a translation or language change.";
 
-const LANGUAGE_RULE_TRANSLATE =
-  "Translate ALL text (name, description, ingredients, instructions, notes, categories, tags) into English.";
-
-function buildSystemPrompt(translate: boolean): string {
-  const rule = translate ? LANGUAGE_RULE_TRANSLATE : LANGUAGE_RULE_KEEP;
-  return SYSTEM_PROMPT_TEMPLATE.replace("{{LANGUAGE_RULE}}", rule);
+function buildSystemPrompt(): string {
+  return SYSTEM_PROMPT_TEMPLATE.replace("{{LANGUAGE_RULE}}", LANGUAGE_RULE_KEEP);
 }
 
 // -------------------------------------------------------------------------
@@ -167,38 +175,46 @@ const client = new OpenAI({
   baseURL: config.openaiBaseUrl,
 });
 
-const MAX_TRANSCRIPT_LENGTH = 12000;
-
-function buildUserMessage(params: {
-  title: string;
-  description: string;
-  transcript: string;
-  customPrompt?: string;
-}): string {
-  const { title, description, transcript, customPrompt } = params;
-
-  const trimmedTranscript =
-    transcript.length > MAX_TRANSCRIPT_LENGTH
-      ? transcript.slice(0, MAX_TRANSCRIPT_LENGTH) + "\n[transcript truncated]"
-      : transcript;
-
+function customInstructions(customPrompt?: string): string {
   const customInstructionBlock = customPrompt?.trim()
     ? `\n\nAdditional User Instructions:\n${customPrompt.trim()}\n\nApply these additional instructions only if they do not conflict with the schema or rules above.`
     : "";
 
-  return `Video Title: ${title}\n\nVideo Description:\n${description || "(no description available)"}\n\nTranscript:\n${trimmedTranscript}${customInstructionBlock}`;
+  return customInstructionBlock;
 }
 
-export async function parseRecipeFromTranscript(params: {
-  title: string;
-  description: string;
-  transcript: string;
-  translate?: boolean;
+export interface RecipeGenerationResult {
+  recipe: ParsedRecipe;
+  preferredSourceImageIndex: number | null;
+}
+
+export async function buildModelMessages(params: {
+  jobId: string;
+  context: NormalizedSourceContext;
   customPrompt?: string;
-}): Promise<ParsedRecipe> {
-  const { translate = false, ...messageParams } = params;
-  const systemPrompt = buildSystemPrompt(translate);
-  const userMessage = buildUserMessage(messageParams);
+}): Promise<ChatCompletionMessageParam[]> {
+  const system = buildSystemPrompt();
+  if (params.context.kind === "text") {
+    const content = buildTextModelInput({ ...params.context, customPrompt: params.customPrompt });
+    return [{ role: "system", content: system }, { role: "user", content }];
+  }
+  if (params.context.assets.length === 0) throw new Error("Image source assets are no longer retained.");
+  const parts: Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }> = [
+    { type: "text", text: `Read the complete recipe from these images in their given order. Return preferredSourceImageIndex for the best final cover.${customInstructions(params.customPrompt)}` },
+  ];
+  for (const asset of params.context.assets) {
+    const stored = await assetManager.read(params.jobId, asset.id);
+    parts.push({ type: "image_url", image_url: { url: `data:${stored.contentType};base64,${stored.buffer.toString("base64")}` } });
+  }
+  return [{ role: "system", content: system }, { role: "user", content: parts }];
+}
+
+export async function parseRecipeSource(params: {
+  jobId: string;
+  context: NormalizedSourceContext;
+  customPrompt?: string;
+}): Promise<RecipeGenerationResult> {
+  const messages = await buildModelMessages(params);
 
   const MAX_RETRIES = 2;
   let lastError: Error | null = null;
@@ -213,8 +229,9 @@ export async function parseRecipeFromTranscript(params: {
       const response = await client.chat.completions.create({
         model: config.openaiModel,
         messages: [
-          { role: "system", content: systemPrompt + extraInstruction },
-          { role: "user", content: userMessage },
+          ...messages.map((message, index) => index === 0 && message.role === "system"
+            ? { ...message, content: String(message.content) + extraInstruction }
+            : message),
         ],
         temperature: 0.2,
       });
@@ -222,10 +239,16 @@ export async function parseRecipeFromTranscript(params: {
       const content = response.choices[0]?.message?.content;
       if (!content) throw new Error("LLM returned empty content");
 
-      const recipe = parseJsonResponse(content);
+      const result = parseJsonResponse(content);
+      if (result.noRecipe === true) throw new IncompleteRecipeError(typeof result.reason === "string" ? `No complete recipe found: ${result.reason}` : "No complete recipe found in the source.");
+      const recipe = result as unknown as ParsedRecipe;
       validateRecipe(recipe);
-      return recipe;
+      const rawIndex = result.preferredSourceImageIndex;
+      const imageCount = params.context.kind === "images" ? params.context.assets.length : 0;
+      const preferredSourceImageIndex = Number.isInteger(rawIndex) && Number(rawIndex) >= 0 && Number(rawIndex) < imageCount ? Number(rawIndex) : imageCount ? 0 : null;
+      return { recipe, preferredSourceImageIndex };
     } catch (err) {
+      if (!isRetryableGenerationError(err)) throw err;
       lastError = err instanceof Error ? err : new Error(String(err));
       console.warn(`[llm] Attempt ${attempt}/${MAX_RETRIES} failed: ${lastError.message}`);
     }
@@ -237,7 +260,7 @@ export async function parseRecipeFromTranscript(params: {
 /**
  * Strip markdown code fences if present, then parse JSON.
  */
-function parseJsonResponse(content: string): ParsedRecipe {
+function parseJsonResponse(content: string): Record<string, unknown> {
   let cleaned = content.trim();
 
   // Remove ```json ... ``` or ``` ... ``` fences
@@ -250,7 +273,7 @@ function parseJsonResponse(content: string): ParsedRecipe {
     throw new Error(`Response does not contain a JSON object: ${cleaned.slice(0, 200)}`);
   }
 
-  return JSON.parse(cleaned.slice(start, end + 1)) as ParsedRecipe;
+  return JSON.parse(cleaned.slice(start, end + 1)) as Record<string, unknown>;
 }
 
 /**
@@ -272,7 +295,7 @@ function validateRecipe(recipe: unknown): asserts recipe is ParsedRecipe {
   }
 
   if (r["recipeIngredient"].length === 0) {
-    throw new Error("Recipe has empty recipeIngredient array");
+    throw new IncompleteRecipeError("Recipe has empty recipeIngredient array");
   }
 
   if (!Array.isArray(r["recipeInstructions"])) {
@@ -280,6 +303,19 @@ function validateRecipe(recipe: unknown): asserts recipe is ParsedRecipe {
   }
 
   if (r["recipeInstructions"].length === 0) {
-    throw new Error("Recipe has empty recipeInstructions array");
+    throw new IncompleteRecipeError("Recipe has empty recipeInstructions array");
   }
+
+  const usableIngredients = r["recipeIngredient"].filter((item) => {
+    if (!item || typeof item !== "object") return false;
+    const ingredient = item as Record<string, unknown>;
+    const originalText = typeof ingredient.originalText === "string" ? ingredient.originalText.trim() : "";
+    const food = ingredient.food && typeof ingredient.food === "object" ? ingredient.food as Record<string, unknown> : null;
+    const foodName = typeof food?.name === "string" ? food.name.trim() : "";
+    return Boolean(originalText || foodName);
+  });
+  const usableInstructions = r["recipeInstructions"].filter((item) => item && typeof item === "object" && typeof (item as Record<string, unknown>).text === "string" && String((item as Record<string, unknown>).text).trim().length > 2);
+  if (usableIngredients.length !== r["recipeIngredient"].length || usableInstructions.length !== r["recipeInstructions"].length) throw new IncompleteRecipeError("Recipe source does not contain both usable ingredients and instructions");
 }
+
+export { MAX_MODEL_INPUT_CHARS };
