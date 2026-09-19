@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { streamSSE } from "hono/streaming";
 import { readFile } from "node:fs/promises";
-import { fetchMetadata, extractSubtitles, downloadAudio, type VideoMetadata } from "../lib/ytdlp.js";
+import { fetchMetadata, extractSubtitles, downloadAudio, downloadVideoThumbnail, type VideoMetadata } from "../lib/ytdlp.js";
 import { transcribeAudio } from "../lib/transcribe.js";
 import { parseRecipeSource, IncompleteRecipeError } from "../lib/llm.js";
 import { importRecipe, prepareRecipeImport } from "../lib/mealie.js";
@@ -23,19 +23,36 @@ function emitFor(jobId: string): Emit {
   };
 }
 
+async function retainRemoteImage(job: Job, url: string, label: string): Promise<ManagedAsset> {
+  const response = await safeFetchBuffer(url, { maxBytes: 10 * 1024 * 1024, timeoutMs: 10_000, contentTypes: ["image/jpeg", "image/png", "image/webp", "image/gif"] });
+  return assetManager.saveRemote(job.id, response.buffer, response.contentType, label);
+}
+
 async function cacheRemoteImage(job: Job, url: string, label: string): Promise<ManagedAsset | null> {
+  try { return await retainRemoteImage(job, url, label); }
+  catch (error) { job.warnings.push(`Source image could not be retained: ${error instanceof Error ? error.message : error}`); return null; }
+}
+
+async function cacheVideoThumbnail(job: Job, metadata: VideoMetadata): Promise<ManagedAsset | null> {
+  const errors: string[] = [];
+  if (metadata.thumbnailUrl) {
+    try { return await retainRemoteImage(job, metadata.thumbnailUrl, "video-thumbnail.jpg"); }
+    catch (error) { errors.push(`direct thumbnail: ${error instanceof Error ? error.message : error}`); }
+  }
   try {
-    const response = await safeFetchBuffer(url, { maxBytes: 10 * 1024 * 1024, timeoutMs: 10_000, contentTypes: ["image/jpeg", "image/png", "image/webp", "image/gif"] });
-    return await assetManager.saveRemote(job.id, response.buffer, response.contentType, label);
+    const sourceUrl = job.source.kind === "url" ? job.source.url : metadata.webpageUrl;
+    const thumbnail = await downloadVideoThumbnail(sourceUrl);
+    return await assetManager.saveRemote(job.id, thumbnail.buffer, thumbnail.contentType, thumbnail.fileName);
   } catch (error) {
-    job.warnings.push(`Source image could not be retained: ${error instanceof Error ? error.message : error}`);
+    errors.push(`yt-dlp fallback: ${error instanceof Error ? error.message : error}`);
+    job.warnings.push(`Source image could not be retained: ${errors.join("; ")}`);
     return null;
   }
 }
 
 async function prepareVideo(job: Job, metadata: VideoMetadata, emit: Emit): Promise<void> {
   job.resolvedSourceType = "video";
-  const remote = metadata.thumbnailUrl ? await cacheRemoteImage(job, metadata.thumbnailUrl, "video-thumbnail.jpg") : null;
+  const remote = await cacheVideoThumbnail(job, metadata);
   if (remote) { job.finalImage.remoteAssetId = remote.id; if (!job.customImage) job.thumbnailUrl = remote.previewUrl; }
   const details: SourceDetails = { sourceType: "video", title: metadata.title, url: metadata.webpageUrl || (job.source.kind === "url" ? job.source.url : ""), uploader: metadata.uploader, duration: metadata.duration, description: metadata.description, hasSubtitles: metadata.hasSubtitles, subtitleLanguage: metadata.subtitleLanguage ?? undefined, customImage: job.customImage };
   job.sourceDetails = details; job.recipeTitle = metadata.title;

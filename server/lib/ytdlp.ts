@@ -84,6 +84,14 @@ export interface AudioResult {
   cleanup: () => Promise<void>;
 }
 
+export interface DownloadedThumbnail {
+  buffer: Buffer;
+  contentType: "image/jpeg" | "image/png" | "image/webp" | "image/gif";
+  fileName: string;
+}
+
+type YtdlpRunner = (args: string[]) => Promise<{ stdout: string; stderr: string }>;
+
 function ytdlp(args: string[]): Promise<{ stdout: string; stderr: string }> {
   const cookiesFile = config.ytdlpCookiesFile;
 
@@ -327,6 +335,33 @@ export async function downloadAudio(url: string): Promise<AudioResult> {
     await cleanup().catch(() => {});
     throw err;
   }
+}
+
+/**
+ * Ask yt-dlp to retain a video's thumbnail without downloading the video.
+ * This is a fallback for extractors that omit a usable remote thumbnail URL
+ * or whose CDN URL cannot be fetched directly by ReelMeal.
+ */
+export async function downloadVideoThumbnail(videoUrl: string, run: YtdlpRunner = ytdlp): Promise<DownloadedThumbnail> {
+  return withTempDir("recipe-thumb-", async (workDir) => {
+    await run([
+      "--skip-download",
+      "--write-thumbnail",
+      "--no-playlist",
+      "--output", `thumbnail:${join(workDir, "thumbnail.%(ext)s")}`,
+      videoUrl,
+    ]);
+
+    const contentTypes = new Map<string, DownloadedThumbnail["contentType"]>([
+      ["jpg", "image/jpeg"], ["jpeg", "image/jpeg"], ["png", "image/png"],
+      ["webp", "image/webp"], ["gif", "image/gif"],
+    ]);
+    const files = await readdir(workDir);
+    const fileName = files.find((file) => file.startsWith("thumbnail.") && contentTypes.has(file.split(".").pop()?.toLowerCase() ?? ""));
+    if (!fileName) throw new Error("yt-dlp did not produce a supported thumbnail image");
+    const extension = fileName.split(".").pop()!.toLowerCase();
+    return { buffer: await readFile(join(workDir, fileName)), contentType: contentTypes.get(extension)!, fileName };
+  });
 }
 
 /**
