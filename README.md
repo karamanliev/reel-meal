@@ -203,3 +203,4 @@ ReelMeal has no built-in authentication or rate limiting. Do not expose it to un
 - [x] Reprompt the model for changes when auto-import is off
 - [x] Support images, recipe page links, and pasted text as recipe inputs
 - [ ] Options/settings panel (in-app UI) instead of editing `.env` manually
+- [ ] Multi-recipe selection: when a link or image contains multiple recipes and the LLM detects them, show a step to select which recipes to add (multiple allowed), then import each selected recipe into Mealie
