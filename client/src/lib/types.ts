@@ -6,7 +6,7 @@ export interface StepState { status: StepStatus; message: string }
 export interface AssetDescriptor { id: string; fileName: string; contentType: string; size: number; previewUrl: string }
 export interface SourceDetails { sourceType: ResolvedSourceType; title?: string; url?: string; uploader?: string; duration?: number; description?: string; hasSubtitles?: boolean; subtitleLanguage?: string; extractionMethod?: string; selectedRecipe?: string | null; textLength?: number; textPreview?: string; imageCount?: number; images?: AssetDescriptor[]; selectedImageIndex?: number; customImage?: AssetDescriptor | null }
 export interface ExtractedContentDetails { content: string; source: "subtitles" | "audio" | "description" | "webpage" | "pasted-text" | "images" }
-export interface ParsingDetails { parsedRecipe: unknown; importPayload: unknown; ingredientWarnings: string[] }
+export interface ParsingDetails { parsedRecipe: unknown; importPayload: unknown; ingredientWarnings: string[]; nutritionWarnings: string[] }
 export interface JobState {
   id: string; sourceKind: "url" | "text" | "images"; displayLabel: string; resolvedSourceType: ResolvedSourceType | null;
   extractTranscript: boolean; autoImport: boolean; customPrompt: string;

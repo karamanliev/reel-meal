@@ -61,3 +61,20 @@ test("custom covers take priority in recipe previews", () => {
   const job = queue.add({ ...params("job-cover"), customImage: custom });
   assert.equal(job.thumbnailUrl, custom.previewUrl);
 });
+
+test("queue snapshots preserve nutrition warnings and reprompt clears stale warnings", () => {
+  const queue = new JobQueue(); queue.setProcessCallback(() => {});
+  const job = queue.add(params("job-nutrition"));
+  const warning = "AI nutrition estimation failed: invalid response. Recipe imported without nutrition.";
+  queue.updateJob(job.id, {
+    normalizedContext: { kind: "images", assets: [asset] },
+    parsingDetails: { parsedRecipe: {}, importPayload: {}, ingredientWarnings: [], nutritionWarnings: [warning] },
+    warnings: [warning],
+  });
+  queue.review(job.id);
+  const snapshot = queue.getSnapshot() as Array<{ parsingDetails: { nutritionWarnings: string[] }; warnings: string[] }>;
+  assert.deepEqual(snapshot[0].parsingDetails.nutritionWarnings, [warning]);
+  assert.equal(queue.reprompt(job.id, "try again"), true);
+  assert.equal(queue.getJob(job.id)?.parsingDetails, null);
+  assert.deepEqual(queue.getJob(job.id)?.warnings, []);
+});

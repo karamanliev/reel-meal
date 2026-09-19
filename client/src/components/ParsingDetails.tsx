@@ -9,6 +9,7 @@ import {
   getSectionTitle,
   formatIngredientPreview,
 } from "../lib/formatters";
+import { NUTRITION_HEADING, SPARKY_NUTRITION_NOTE } from "../lib/recipe-utils";
 
 interface ParsingDetailsProps {
   details: ParsingDetailsType;
@@ -159,6 +160,19 @@ export function ParsingDetails({
           </div>
         )}
 
+        {details.nutritionWarnings.length > 0 && (
+          <div className="neo-subpanel bg-[#ffd6d0] p-4 shadow-neo-xs">
+            <SectionHeading>Nutrition estimation warnings</SectionHeading>
+            <div className="mt-2 grid gap-1.5">
+              {details.nutritionWarnings.map((warning) => (
+                <p key={warning} className="m-0 text-sm leading-6 font-500 text-ink">
+                  {warning}
+                </p>
+              ))}
+            </div>
+          </div>
+        )}
+
         {(recipeFacts.length > 0 || nutritionEntries.length > 0) && (
           <div className="grid gap-3">
             <SectionHeading>Recipe details</SectionHeading>
@@ -166,8 +180,9 @@ export function ParsingDetails({
 
             {nutritionEntries.length > 0 && (
               <div className="grid gap-3">
-                <SectionHeading>Nutrition</SectionHeading>
+                <SectionHeading>{NUTRITION_HEADING}</SectionHeading>
                 <FactGrid items={nutritionEntries} />
+                <p className="neo-note">{SPARKY_NUTRITION_NOTE}</p>
               </div>
             )}
           </div>

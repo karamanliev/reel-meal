@@ -146,6 +146,13 @@ export interface PreparedRecipeImport {
   ingredientWarnings: string[];
 }
 
+function getImportNutrition(nutrition: ParsedRecipe["nutrition"]): ParsedRecipe["nutrition"] | undefined {
+  if (!nutrition) return undefined;
+  const fields = ["calories", "proteinContent", "carbohydrateContent", "fatContent"] as const;
+  if (!fields.every((field) => typeof nutrition[field] === "string" && nutrition[field]!.trim())) return undefined;
+  return Object.fromEntries(fields.map((field) => [field, nutrition[field]])) as ParsedRecipe["nutrition"];
+}
+
 // -------------------------------------------------------------------------
 // Food / Unit resolution with caching
 //
@@ -160,16 +167,52 @@ interface PaginatedResponse {
   items?: Array<{ id: string; name: string }>;
 }
 
+interface LookupOptions {
+  allowSimilar?: boolean;
+}
+
+const FOOD_SIMILARITY_THRESHOLD = 0.92;
+const FOOD_SIMILARITY_MARGIN = 0.04;
+
 function normalizeLookupKey(value: string): string {
   return value.trim().toLowerCase();
+}
+
+function normalizeComparableName(value: string): string {
+  return (value.normalize("NFKC").toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).sort().join(" ");
+}
+
+function levenshteinDistance(left: string, right: string): number {
+  if (!left) return right.length;
+  if (!right) return left.length;
+  let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+    const current = [leftIndex];
+    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+      current[rightIndex] = Math.min(
+        current[rightIndex - 1]! + 1,
+        previous[rightIndex]! + 1,
+        previous[rightIndex - 1]! + (left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1),
+      );
+    }
+    previous = current;
+  }
+  return previous[right.length]!;
+}
+
+function nameSimilarity(left: string, right: string): number {
+  const normalizedLeft = normalizeComparableName(left);
+  const normalizedRight = normalizeComparableName(right);
+  const longest = Math.max(normalizedLeft.length, normalizedRight.length);
+  if (longest === 0) return 1;
+  return 1 - levenshteinDistance(normalizedLeft, normalizedRight) / longest;
 }
 
 async function lookupNamedValue(
   path: string,
   name: string,
-  options?: { acceptSingleResult?: boolean }
+  options: LookupOptions = {},
 ): Promise<MealieIdValue | null> {
-  const acceptSingleResult = options?.acceptSingleResult ?? true;
   const response = await mealieRequest<PaginatedResponse>(
     "GET",
     `${path}?search=${encodeURIComponent(name)}&perPage=50`
@@ -177,27 +220,35 @@ async function lookupNamedValue(
 
   const items = response.items ?? [];
 
-  // Exact (case-insensitive) match
+  // Prefer exact names. Food lookups may opt into a conservative similarity
+  // check below, while localized units remain exact-only.
   const exact = items.find(
     (item) => normalizeLookupKey(item.name) === normalizeLookupKey(name)
   );
   if (exact) return { id: exact.id, name: exact.name };
 
-  // Accept first result if only one came back (close-enough match)
-  if (acceptSingleResult && items.length === 1) {
-    return { id: items[0].id, name: items[0].name };
+  if (options.allowSimilar) {
+    const ranked = items
+      .map((item) => ({ item, score: nameSimilarity(name, item.name) }))
+      .sort((left, right) => right.score - left.score);
+    const best = ranked[0];
+    const runnerUp = ranked[1];
+    if (best && best.score >= FOOD_SIMILARITY_THRESHOLD
+      && (best.score === 1 || !runnerUp || best.score - runnerUp.score >= FOOD_SIMILARITY_MARGIN)) {
+      return { id: best.item.id, name: best.item.name };
+    }
   }
 
   return null;
 }
 
-async function createNamedValue(path: string, name: string): Promise<MealieIdValue | null> {
+async function createNamedValue(path: string, name: string, options: LookupOptions): Promise<MealieIdValue | null> {
   try {
     const created = await mealieRequest<{ id: string; name: string }>("POST", path, { name });
     return { id: created.id, name: created.name };
   } catch {
     // Creation may fail if a race-condition duplicate exists — retry lookup
-    return lookupNamedValue(path, name);
+    return lookupNamedValue(path, name, options);
   }
 }
 
@@ -205,13 +256,13 @@ function getCachedIdValue(
   cache: Map<string, Promise<MealieIdValue | null>>,
   path: string,
   name: string,
-  options?: { acceptSingleResult?: boolean }
+  options: LookupOptions = {},
 ): Promise<MealieIdValue | null> {
   const key = normalizeLookupKey(name);
   let pending = cache.get(key);
   if (!pending) {
     pending = lookupNamedValue(path, name, options)
-      .then((existing) => existing ?? createNamedValue(path, name))
+      .then((existing) => existing ?? createNamedValue(path, name, options))
       .catch((err) => {
         console.warn(`[mealie] Failed to resolve ${path} "${name}": ${err instanceof Error ? err.message : err}`);
         // Remove from cache so a retry can succeed next time
@@ -226,16 +277,13 @@ function getCachedIdValue(
 async function resolveFood(name: string | undefined | null): Promise<MealieIdValue | null> {
   const trimmed = name?.trim();
   if (!trimmed) return null;
-  return getCachedIdValue(foodCache, "/api/foods", trimmed);
+  return getCachedIdValue(foodCache, "/api/foods", trimmed, { allowSimilar: true });
 }
 
 async function resolveUnit(name: string | undefined | null): Promise<MealieIdValue | null> {
   const trimmed = name?.trim();
   if (!trimmed) return null;
-  // Units should preserve the recipe's original language/script. Avoid fuzzy
-  // single-result matches like "мл" -> "milliliter" and create the exact
-  // unit name instead when Mealie does not already have it.
-  return getCachedIdValue(unitCache, "/api/units", trimmed, { acceptSingleResult: false });
+  return getCachedIdValue(unitCache, "/api/units", trimmed);
 }
 
 // -------------------------------------------------------------------------
@@ -385,6 +433,7 @@ export async function prepareRecipeImport(
     text: step.text,
     ingredientReferences: [],
   }));
+  const nutrition = getImportNutrition(recipe.nutrition);
 
   return {
     payload: {
@@ -398,7 +447,7 @@ export async function prepareRecipeImport(
       recipeInstructions,
       recipeCategory: [],
       tags: [],
-      nutrition: recipe.nutrition,
+      ...(nutrition ? { nutrition } : {}),
       orgURL: originalUrl,
     },
     ingredientWarnings,

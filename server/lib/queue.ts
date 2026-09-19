@@ -35,7 +35,7 @@ export interface ExtractedContentDetails {
   source: "subtitles" | "audio" | "description" | "webpage" | "pasted-text" | "images";
 }
 
-export interface JobParsingDetails { parsedRecipe: unknown; importPayload: unknown; ingredientWarnings: string[] }
+export interface JobParsingDetails { parsedRecipe: unknown; importPayload: unknown; ingredientWarnings: string[]; nutritionWarnings: string[] }
 export interface FinalImageState { customAssetId?: string; sourceAssetId?: string; remoteAssetId?: string; selectedSourceIndex?: number; warnings: string[] }
 
 export interface JobParams {
@@ -145,6 +145,8 @@ export class JobQueue extends EventEmitter {
 
   reprompt(jobId: string, customPrompt: string): boolean {
     const job = this.jobs.get(jobId); if (!job?.normalizedContext || job.recipeUrl || this.importingIds.has(jobId) || !["done", "error"].includes(job.status) || this.activeJobId) return false;
+    const previousNutritionWarnings = job.parsingDetails?.nutritionWarnings ?? [];
+    if (previousNutritionWarnings.length) job.warnings = job.warnings.filter((warning) => !previousNutritionWarnings.includes(warning));
     this.touch(jobId); job.customPrompt = customPrompt; job.status = "active"; job.parsingDetails = null; job.preparedImport = null;
     job.recipeUrl = null; job.errorMessage = null; job.steps.generation = { status: "loading", message: "Re-generating recipe with AI..." };
     job.steps.importing = { status: "idle", message: "" }; this.activeJobId = jobId; this.cancelledIds.delete(jobId);

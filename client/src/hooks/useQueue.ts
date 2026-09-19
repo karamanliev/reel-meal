@@ -7,14 +7,20 @@ import { consumeSharedPayload } from "../lib/share-inbox";
 const CUSTOM_PROMPT_MAX_LENGTH = 400;
 
 function initialText(): string { if (typeof window === "undefined") return ""; return new URLSearchParams(location.search).get("url")?.trim() ?? ""; }
+function stringArray(value: unknown): string[] { return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []; }
+function normalizeParsingDetails(value: unknown): ParsingDetails | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const details = value as Record<string, unknown>;
+  return { parsedRecipe: details.parsedRecipe, importPayload: details.importPayload, ingredientWarnings: stringArray(details.ingredientWarnings), nutritionWarnings: stringArray(details.nutritionWarnings) };
+}
 function fromSnapshot(data: Record<string, unknown>): JobState {
   const steps = structuredClone(DEFAULT_STEPS); const raw = data.steps as Partial<Record<StepName, StepState>> | undefined;
   for (const key of Object.keys(DEFAULT_STEPS) as StepName[]) if (raw?.[key]) steps[key] = raw[key]!;
   const job: JobState = { id: String(data.id), sourceKind: data.sourceKind as JobState["sourceKind"], displayLabel: String(data.displayLabel ?? "Recipe"), resolvedSourceType: (data.resolvedSourceType as JobState["resolvedSourceType"]) ?? null,
     extractTranscript: data.extractTranscript !== false, autoImport: data.autoImport !== false, customPrompt: String(data.customPrompt ?? ""), status: data.status as JobState["status"], addedAt: Number(data.addedAt), steps,
     recipeTitle: data.recipeTitle as string | null, thumbnailUrl: data.thumbnailUrl as string | null, recipeUrl: data.recipeUrl as string | null, errorMessage: data.errorMessage as string | null,
-    warnings: Array.isArray(data.warnings) ? data.warnings.filter((value): value is string => typeof value === "string") : [], sourceDetails: data.sourceDetails as SourceDetails | null,
-    extractedContentDetails: data.extractedContentDetails as ExtractedContentDetails | null, parsingDetails: data.parsingDetails as ParsingDetails | null, hasRetainedContext: data.hasRetainedContext === true,
+    warnings: stringArray(data.warnings), sourceDetails: data.sourceDetails as SourceDetails | null,
+    extractedContentDetails: data.extractedContentDetails as ExtractedContentDetails | null, parsingDetails: normalizeParsingDetails(data.parsingDetails), hasRetainedContext: data.hasRetainedContext === true,
     position: Number(data.position ?? 0), totalInQueue: Number(data.totalInQueue ?? 0), phase: "loading", manualImportError: null, expandedDetails: {} };
   job.phase = derivePhase(job); return job;
 }
@@ -56,9 +62,9 @@ export function useQueue() {
       if (detail.resolvedSourceType) patch.resolvedSourceType = detail.resolvedSourceType as JobState["resolvedSourceType"];
       if (detail.sourceDetails) patch.sourceDetails = detail.sourceDetails as SourceDetails;
       if (detail.extractedContentDetails) patch.extractedContentDetails = detail.extractedContentDetails as ExtractedContentDetails;
-      if (detail.parsingDetails) patch.parsingDetails = detail.parsingDetails as ParsingDetails;
+      if (detail.parsingDetails) patch.parsingDetails = normalizeParsingDetails(detail.parsingDetails);
       if (detail.recipeTitle) patch.recipeTitle = String(detail.recipeTitle); if (detail.thumbnailUrl) patch.thumbnailUrl = String(detail.thumbnailUrl); if (detail.recipeUrl) patch.recipeUrl = String(detail.recipeUrl);
-      if (Array.isArray(detail.warnings)) patch.warnings = detail.warnings.filter((value): value is string => typeof value === "string");
+      if (Array.isArray(detail.warnings)) patch.warnings = stringArray(detail.warnings);
       if (message.error) patch.errorMessage = message.error; if (Object.keys(patch).length) updateJob(message.jobId, patch);
     }
   }, [refresh, removeLocal, updateJob, updateStep]);

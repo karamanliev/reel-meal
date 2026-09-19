@@ -6,6 +6,7 @@ import { fetchMetadata, extractSubtitles, downloadAudio, type VideoMetadata } fr
 import { transcribeAudio } from "../lib/transcribe.js";
 import { parseRecipeSource, IncompleteRecipeError } from "../lib/llm.js";
 import { importRecipe, prepareRecipeImport } from "../lib/mealie.js";
+import { estimateRecipeNutrition } from "../lib/nutrition.js";
 import { assetManager, type ManagedAsset } from "../lib/assets.js";
 import { extractRecipeWebpage } from "../lib/webpage.js";
 import { safeFetchBuffer, validatePublicUrl } from "../lib/safe-fetch.js";
@@ -115,6 +116,12 @@ async function generate(job: Job, emit: Emit): Promise<void> {
     if (job.resolvedSourceType === "images" && !(error instanceof IncompleteRecipeError) && looksLikeVisionCapabilityError) throw new Error(`The configured OPENAI_MODEL may not support image input: ${message}`);
     throw error;
   }
+  await emit({ step: "generation", status: "loading", message: "Estimating nutrition per 100 g..." });
+  delete generated.recipe.nutrition;
+  const nutritionResult = await estimateRecipeNutrition(generated.recipe);
+  const nutritionWarnings = nutritionResult.warning ? [nutritionResult.warning] : [];
+  if (nutritionResult.nutrition) generated.recipe.nutrition = nutritionResult.nutrition;
+  if (nutritionWarnings.length) job.warnings.push(...nutritionWarnings);
   const orgUrl = job.normalizedContext.kind === "text" && (job.resolvedSourceType === "video" || job.resolvedSourceType === "webpage") ? job.normalizedContext.attributionUrl : "";
   job.preparedImport = await prepareRecipeImport(generated.recipe, orgUrl);
   if (job.resolvedSourceType === "images") {
@@ -124,8 +131,8 @@ async function generate(job: Job, emit: Emit): Promise<void> {
     if (!job.customImage && selected) job.thumbnailUrl = selected.previewUrl;
   }
   job.recipeTitle = generated.recipe.name;
-  job.parsingDetails = { parsedRecipe: generated.recipe, importPayload: job.preparedImport.payload, ingredientWarnings: job.preparedImport.ingredientWarnings };
-  await emit({ step: "generation", status: "done", message: `Recipe generated: ${generated.recipe.name}`, data: { parsingDetails: job.parsingDetails, recipeTitle: generated.recipe.name, sourceDetails: job.sourceDetails, thumbnailUrl: job.thumbnailUrl } });
+  job.parsingDetails = { parsedRecipe: generated.recipe, importPayload: job.preparedImport.payload, ingredientWarnings: job.preparedImport.ingredientWarnings, nutritionWarnings };
+  await emit({ step: "generation", status: "done", message: `Recipe generated: ${generated.recipe.name}`, data: { parsingDetails: job.parsingDetails, recipeTitle: generated.recipe.name, sourceDetails: job.sourceDetails, thumbnailUrl: job.thumbnailUrl, warnings: job.warnings } });
 }
 
 async function importPrepared(job: Job, emit: Emit): Promise<{ recipeUrl: string }> {

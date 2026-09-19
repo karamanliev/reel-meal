@@ -38,10 +38,11 @@ test("queue events received during initial hydration are replayed after the snap
 
   try {
     await act(async () => { root.render(React.createElement(Harness)); });
-    const eventJob = { id: "event-job", sourceKind: "text", displayLabel: "Soup", status: "queued", addedAt: 1, steps: {}, warnings: [], hasRetainedContext: false };
+    const eventJob = { id: "event-job", sourceKind: "text", displayLabel: "Soup", status: "queued", addedAt: 1, steps: {}, warnings: [], parsingDetails: { parsedRecipe: {}, importPayload: {}, ingredientWarnings: [] }, hasRetainedContext: false };
     await act(async () => { FakeEventSource.current!.emit("job-added", JSON.stringify(eventJob)); });
     await act(async () => { resolveSnapshot!(new Response("[]", { status: 200, headers: { "content-type": "application/json" } })); await new Promise((resolve) => setTimeout(resolve, 0)); });
     assert.equal(latest!.jobs.some((job) => job.id === "event-job"), true);
+    assert.deepEqual(latest!.jobs.find((job) => job.id === "event-job")?.parsingDetails?.nutritionWarnings, []);
     await act(async () => { FakeEventSource.current!.emit("job-added", JSON.stringify({ ...eventJob, thumbnailUrl: "/api/assets/event-job/custom-cover" })); });
     assert.equal(latest!.jobs.find((job) => job.id === "event-job")?.thumbnailUrl, "/api/assets/event-job/custom-cover");
   } finally {

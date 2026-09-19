@@ -18,6 +18,9 @@ import {
   sameJson,
 } from "./formatters";
 
+export const NUTRITION_HEADING = "AI estimated nutrition per 100 g";
+export const SPARKY_NUTRITION_NOTE = "With the current SparkyFitness Mealie integration, treat 1 serving as 100 g. For example, 1.5 servings represents 150 g.";
+
 export function buildRecipeFacts(details: ParsingDetails): RecipeFact[] {
   const parsedRecipe = isRecord(details.parsedRecipe)
     ? details.parsedRecipe
@@ -79,11 +82,8 @@ export function getNutritionEntries(
   const fields: Array<[key: string, label: string]> = [
     ["calories", "Calories"],
     ["proteinContent", "Protein"],
-    ["fatContent", "Fat"],
     ["carbohydrateContent", "Carbs"],
-    ["fiberContent", "Fiber"],
-    ["sugarContent", "Sugar"],
-    ["sodiumContent", "Sodium"],
+    ["fatContent", "Fat"],
   ];
 
   return fields

@@ -1,6 +1,6 @@
-import OpenAI from "openai";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { config } from "./config.js";
+import { openAIClient } from "./openai-client.js";
 import { buildTextModelInput, MAX_MODEL_INPUT_CHARS } from "./input.js";
 import type { NormalizedSourceContext } from "./queue.js";
 import { assetManager } from "./assets.js";
@@ -34,6 +34,19 @@ export interface RecipeNutrition {
   sodiumContent?: string;
 }
 
+export type SourceNutritionBasis = "per100g" | "perServing" | "wholeRecipe" | "unknown";
+
+export interface SourceNutritionEvidence {
+  values: {
+    calories?: string | number;
+    proteinContent?: string | number;
+    carbohydrateContent?: string | number;
+    fatContent?: string | number;
+  };
+  basis: SourceNutritionBasis;
+  servingWeightGrams?: number | null;
+}
+
 export interface RecipeCategory {
   name: string;
 }
@@ -53,6 +66,7 @@ export interface ParsedRecipe {
   recipeInstructions: RecipeInstruction[];
   recipeCategory?: RecipeCategory[];
   tags?: RecipeTag[];
+  sourceNutritionEvidence?: SourceNutritionEvidence;
   nutrition?: RecipeNutrition;
 }
 
@@ -95,14 +109,15 @@ Schema:
   ],
   "recipeCategory": [{ "name": "string" }],
   "tags": [{ "name": "string" }],
-  "nutrition": {
-    "calories": "string e.g. '320 kcal' or null",
-    "proteinContent": "string e.g. '12 g' or null",
-    "fatContent": "string or null",
-    "carbohydrateContent": "string or null",
-    "fiberContent": "string or null",
-    "sugarContent": "string or null",
-    "sodiumContent": "string or null"
+  "sourceNutritionEvidence": {
+    "values": {
+      "calories": "exact source string or number, if stated",
+      "proteinContent": "exact source string or number, if stated",
+      "fatContent": "exact source string or number, if stated",
+      "carbohydrateContent": "exact source string or number, if stated"
+    },
+    "basis": "per100g | perServing | wholeRecipe | unknown",
+    "servingWeightGrams": "number or null"
   },
   "preferredSourceImageIndex": "zero-based integer for image sources only"
 }
@@ -119,7 +134,9 @@ Rules:
   - Do NOT split trivial motions into separate steps.
   - Keep a separate step only when the transition is meaningfully distinct in the source.
 - Choose appropriate categories (e.g. "Dinner", "Breakfast", "Dessert", "Soup") and tags (e.g. "Italian", "Vegetarian", "Quick", "Gluten-Free").
-- If nutrition info is not explicitly mentioned, omit the nutrition field entirely.
+- Capture sourceNutritionEvidence only when the source explicitly states at least one of calories, protein, carbohydrates, or fat. Preserve the stated values without estimating or filling gaps.
+- Set its basis to per100g, perServing, or wholeRecipe only when the source makes that basis clear. Otherwise use unknown. Include servingWeightGrams only when explicitly stated.
+- Do not output a nutrition field. Final nutrition is calculated separately.
 - Source content may be noisy. Normalize explicit information, but do not fabricate missing ingredients or instructions.
 
 Grouping rules:
@@ -169,11 +186,6 @@ function buildSystemPrompt(): string {
 // -------------------------------------------------------------------------
 // Main parsing function
 // -------------------------------------------------------------------------
-
-const client = new OpenAI({
-  apiKey: config.openaiApiKey,
-  baseURL: config.openaiBaseUrl,
-});
 
 function customInstructions(customPrompt?: string): string {
   const customInstructionBlock = customPrompt?.trim()
@@ -226,7 +238,7 @@ export async function parseRecipeSource(params: {
           ? "\n\nIMPORTANT: Your previous response was not valid JSON. Output ONLY a raw JSON object, no markdown, no explanation, no code fences."
           : "";
 
-      const response = await client.chat.completions.create({
+      const response = await openAIClient.chat.completions.create({
         model: config.openaiModel,
         messages: [
           ...messages.map((message, index) => index === 0 && message.role === "system"
