@@ -3,6 +3,7 @@ client/node_modules/
 client/dist/
 dist/
 .env
+.opencode/
 *.local
 cookies.txt
 .opencode/plans/
