@@ -9,7 +9,7 @@ import { importRecipe, prepareRecipeImport } from "../lib/mealie.js";
 import { assetManager, type ManagedAsset } from "../lib/assets.js";
 import { extractRecipeWebpage } from "../lib/webpage.js";
 import { safeFetchBuffer, validatePublicUrl } from "../lib/safe-fetch.js";
-import { assertModelInputLength, MAX_CUSTOM_PROMPT_CHARS, MAX_MULTIPART_BYTES, type SubmittedSource } from "../lib/input.js";
+import { assertModelInputLength, buildTextModelInput, isExactHttpUrl, MAX_CUSTOM_PROMPT_CHARS, MAX_MULTIPART_BYTES, type SubmittedSource } from "../lib/input.js";
 import { jobQueue, type Job, type StepName, type StepState, type SourceDetails, type ExtractedContentDetails } from "../lib/queue.js";
 
 type SSEEvent = { step: StepName; status: StepState["status"]; message?: string; data?: Record<string, unknown>; error?: string };
@@ -35,28 +35,27 @@ async function cacheRemoteImage(job: Job, url: string, label: string): Promise<M
 async function prepareVideo(job: Job, metadata: VideoMetadata, emit: Emit): Promise<void> {
   job.resolvedSourceType = "video";
   const remote = metadata.thumbnailUrl ? await cacheRemoteImage(job, metadata.thumbnailUrl, "video-thumbnail.jpg") : null;
-  if (remote) { job.finalImage.remoteAssetId = remote.id; job.thumbnailUrl = remote.previewUrl; }
+  if (remote) { job.finalImage.remoteAssetId = remote.id; if (!job.customImage) job.thumbnailUrl = remote.previewUrl; }
   const details: SourceDetails = { sourceType: "video", title: metadata.title, url: metadata.webpageUrl || (job.source.kind === "url" ? job.source.url : ""), uploader: metadata.uploader, duration: metadata.duration, description: metadata.description, hasSubtitles: metadata.hasSubtitles, subtitleLanguage: metadata.subtitleLanguage ?? undefined, customImage: job.customImage };
   job.sourceDetails = details; job.recipeTitle = metadata.title;
   await emit({ step: "source", status: "done", message: `Found video: ${metadata.title}`, data: { sourceDetails: details, recipeTitle: metadata.title, thumbnailUrl: job.thumbnailUrl, resolvedSourceType: "video" } });
 
-  let transcript = ""; let source: ExtractedContentDetails["source"] = "subtitles"; let cleanup: (() => Promise<void>) | null = null;
+  let transcript = ""; let source: ExtractedContentDetails["source"] = "subtitles";
   if (job.extractTranscript) {
     await emit({ step: "extraction", status: "loading", message: metadata.hasSubtitles ? "Extracting subtitles..." : "Downloading audio for transcription..." });
     const subtitles = metadata.hasSubtitles && metadata.subtitleLanguage ? await extractSubtitles((job.source as { kind: "url"; url: string }).url, metadata.subtitleLanguage) : null;
     if (subtitles) transcript = subtitles.text;
     else {
-      const audio = await downloadAudio((job.source as { kind: "url"; url: string }).url); cleanup = audio.cleanup; source = "audio";
-      transcript = await transcribeAudio(audio.filePath);
+      const audio = await downloadAudio((job.source as { kind: "url"; url: string }).url); source = "audio";
+      try { transcript = await transcribeAudio(audio.filePath); }
+      finally { await audio.cleanup().catch(() => {}); }
     }
   }
-  try {
-    const body = assertModelInputLength(`${metadata.description}${transcript ? `\n\nTranscript:\n${transcript}` : ""}`);
-    job.normalizedContext = { kind: "text", sourceType: "video", title: metadata.title, description: metadata.description, body, attributionUrl: metadata.webpageUrl || (job.source as { kind: "url"; url: string }).url, extractionMethod: transcript ? source : "description" };
-    const extracted: ExtractedContentDetails = { content: body, source: transcript ? source : "description" };
-    job.extractedContentDetails = extracted;
-    await emit({ step: "extraction", status: "done", message: transcript ? `${source === "audio" ? "Audio transcribed" : "Subtitles extracted"}.` : "Using video description.", data: { extractedContentDetails: extracted } });
-  } finally { if (cleanup) await cleanup().catch(() => {}); }
+  const body = assertModelInputLength(`${metadata.description}${transcript ? `\n\nTranscript:\n${transcript}` : ""}`);
+  job.normalizedContext = { kind: "text", sourceType: "video", title: metadata.title, description: metadata.description, body, attributionUrl: metadata.webpageUrl || (job.source as { kind: "url"; url: string }).url, extractionMethod: transcript ? source : "description" };
+  const extracted: ExtractedContentDetails = { content: body, source: transcript ? source : "description" };
+  job.extractedContentDetails = extracted;
+  await emit({ step: "extraction", status: "done", message: transcript ? `${source === "audio" ? "Audio transcribed" : "Subtitles extracted"}.` : "Using video description.", data: { extractedContentDetails: extracted } });
 }
 
 async function prepareUrl(job: Job, emit: Emit): Promise<void> {
@@ -64,13 +63,15 @@ async function prepareUrl(job: Job, emit: Emit): Promise<void> {
   await emit({ step: "source", status: "loading", message: "Checking URL and trying video extraction first..." });
   await validatePublicUrl(url);
   let videoError = "";
-  try { const metadata = await fetchMetadata(url); await prepareVideo(job, metadata, emit); return; }
+  let metadata: VideoMetadata | null = null;
+  try { metadata = await fetchMetadata(url); }
   catch (error) { videoError = error instanceof Error ? error.message : String(error); }
+  if (metadata) { await prepareVideo(job, metadata, emit); return; }
   await emit({ step: "source", status: "loading", message: "Not a supported video. Fetching static recipe page..." });
   try {
     const page = await extractRecipeWebpage(url); job.resolvedSourceType = "webpage";
     const remote = page.imageUrl ? await cacheRemoteImage(job, page.imageUrl, "webpage-recipe-image.jpg") : null;
-    if (remote) { job.finalImage.remoteAssetId = remote.id; job.thumbnailUrl = remote.previewUrl; }
+    if (remote) { job.finalImage.remoteAssetId = remote.id; if (!job.customImage) job.thumbnailUrl = remote.previewUrl; }
     const details: SourceDetails = { sourceType: "webpage", title: page.title, url: page.canonicalUrl, description: page.description, extractionMethod: page.extractionMethod, selectedRecipe: page.selectedRecipe, customImage: job.customImage };
     job.sourceDetails = details; job.recipeTitle = page.title;
     job.normalizedContext = { kind: "text", sourceType: "webpage", title: page.title, description: page.description, body: page.body, attributionUrl: page.canonicalUrl, extractionMethod: page.extractionMethod };
@@ -97,7 +98,7 @@ async function prepareSource(job: Job, emit: Emit): Promise<void> {
   for (const asset of job.sourceAssets) await assetManager.resolve(job.id, asset.id);
   job.resolvedSourceType = "images"; job.normalizedContext = { kind: "images", assets: job.sourceAssets };
   job.sourceDetails = { sourceType: "images", title: `${job.sourceAssets.length} recipe image${job.sourceAssets.length === 1 ? "" : "s"}`, imageCount: job.sourceAssets.length, images: job.sourceAssets, customImage: job.customImage };
-  job.thumbnailUrl = job.sourceAssets[0]?.previewUrl ?? job.customImage?.previewUrl ?? null;
+  job.thumbnailUrl = job.customImage?.previewUrl ?? job.sourceAssets[0]?.previewUrl ?? null;
   job.extractedContentDetails = { content: `${job.sourceAssets.length} ordered recipe images retained for vision analysis.`, source: "images" };
   await emit({ step: "source", status: "done", message: `${job.sourceAssets.length} recipe image${job.sourceAssets.length === 1 ? "" : "s"} ready.`, data: { sourceDetails: job.sourceDetails, thumbnailUrl: job.thumbnailUrl, resolvedSourceType: "images" } });
   await emit({ step: "extraction", status: "done", message: "Images ready for vision analysis.", data: { extractedContentDetails: job.extractedContentDetails } });
@@ -129,7 +130,7 @@ async function generate(job: Job, emit: Emit): Promise<void> {
 
 async function importPrepared(job: Job, emit: Emit): Promise<{ recipeUrl: string }> {
   if (!job.preparedImport) throw new Error("Prepared recipe is missing. Generate it again.");
-  jobQueue.touch(job.id); await emit({ step: "importing", status: "loading", message: "Importing to Mealie..." });
+  await emit({ step: "importing", status: "loading", message: "Importing to Mealie..." });
   const ids = [job.finalImage.customAssetId, job.finalImage.sourceAssetId ?? job.finalImage.remoteAssetId].filter((id, index, all): id is string => Boolean(id) && all.indexOf(id) === index);
   const paths: string[] = [];
   for (const id of ids) { try { paths.push((await assetManager.resolve(job.id, id)).path); } catch (error) { job.warnings.push(`Image is no longer available: ${error instanceof Error ? error.message : error}`); } }
@@ -141,13 +142,15 @@ async function importPrepared(job: Job, emit: Emit): Promise<{ recipeUrl: string
 
 async function finishAfterGeneration(job: Job, emit: Emit): Promise<void> {
   if (!job.autoImport) { await emit({ step: "importing", status: "idle", message: "Ready to import when you are." }); jobQueue.review(job.id); return; }
-  const result = await importPrepared(job, emit); jobQueue.complete(job.id, result.recipeUrl);
+  if (!jobQueue.beginImport(job.id)) throw new Error("Recipe import is already running or no longer available.");
+  try { const result = await importPrepared(job, emit); jobQueue.complete(job.id, result.recipeUrl); }
+  finally { jobQueue.endImport(job.id); }
 }
 
 async function processJob(jobId: string): Promise<void> {
   const job = jobQueue.getJob(jobId); if (!job) return; const emit = emitFor(jobId);
   try { await prepareSource(job, emit); if (jobQueue.isCancelled(jobId)) return; await generate(job, emit); if (jobQueue.isCancelled(jobId)) return; await finishAfterGeneration(job, emit); }
-  catch (error) { if (jobQueue.isCancelled(jobId)) return; const message = error instanceof Error ? error.message : String(error); const step = job.normalizedContext ? "generation" : "source"; await emit({ step, status: "error", error: message }); jobQueue.fail(jobId, message); }
+  catch (error) { if (jobQueue.isCancelled(jobId)) return; const message = error instanceof Error ? error.message : String(error); const step = job.steps.importing.status === "loading" ? "importing" : job.steps.extraction.status === "loading" ? "extraction" : job.normalizedContext ? "generation" : "source"; await emit({ step, status: "error", error: message }); jobQueue.fail(jobId, message); }
 }
 
 jobQueue.setProcessCallback((jobId) => void processJob(jobId));
@@ -174,6 +177,7 @@ parseRouter.post("/api/parse", bodyLimit({ maxSize: MAX_MULTIPART_BYTES, onError
     if (contentType.includes("application/json")) {
       const raw = await c.req.json<Record<string, unknown>>(); const url = typeof raw.url === "string" ? raw.url.trim() : "";
       if (!url) return c.json({ error: "Missing required field: url" }, 400); jobId = safeJobId(typeof raw.jobId === "string" ? raw.jobId : "");
+      if (!isExactHttpUrl(url)) return c.json({ error: "URL must be one complete HTTP or HTTPS URL." }, 400);
       const customPrompt = typeof raw.customPrompt === "string" ? raw.customPrompt.trim() : ""; if (customPrompt.length > MAX_CUSTOM_PROMPT_CHARS) return c.json({ error: "Custom prompt is too long." }, 400);
       const job = jobQueue.add({ id: jobId, source: { kind: "url", url }, displayLabel: url, sourceAssets: [], customImage: null, extractTranscript: raw.extractTranscript !== false, autoImport: raw.autoImport !== false, customPrompt });
       return c.json({ jobId: job.id });
@@ -190,7 +194,7 @@ parseRouter.post("/api/parse", bodyLimit({ maxSize: MAX_MULTIPART_BYTES, onError
     if (sourceFiles.length) sourceAssets = await assetManager.saveUploads(jobId, sourceFiles, "source");
     if (customFiles.length) customImage = (await assetManager.saveUploads(jobId, customFiles, "custom"))[0] ?? null;
     let source: SubmittedSource;
-    if (kind === "url") source = { kind: "url", url: value }; else if (kind === "text") source = { kind: "text", text: assertModelInputLength(value) }; else { if (!sourceAssets.length) throw new Error("Choose at least one source image."); source = { kind: "images", assetIds: sourceAssets.map((asset) => asset.id) }; }
+    if (kind === "url") { if (!isExactHttpUrl(value)) throw new Error("URL must be one complete HTTP or HTTPS URL."); source = { kind: "url", url: value }; } else if (kind === "text") { const text = assertModelInputLength(value); buildTextModelInput({ sourceType: "text", title: "Pasted recipe", description: "", body: text, attributionUrl: "", extractionMethod: "pasted-text", customPrompt }); source = { kind: "text", text }; } else { if (!sourceAssets.length) throw new Error("Choose at least one source image."); source = { kind: "images", assetIds: sourceAssets.map((asset) => asset.id) }; }
     const displayLabel = source.kind === "url" ? source.url : source.kind === "text" ? source.text.slice(0, 80) : `${sourceAssets.length} recipe image${sourceAssets.length === 1 ? "" : "s"}`;
     const job = jobQueue.add({ id: jobId, source, displayLabel, sourceAssets, customImage, extractTranscript: bool(field(body, "extractTranscript"), true), autoImport: bool(field(body, "autoImport"), true), customPrompt });
     return c.json({ jobId: job.id });
@@ -211,14 +215,16 @@ parseRouter.delete("/api/queue/:jobId", (c) => { const job = jobQueue.getJob(c.r
 
 parseRouter.post("/api/import/:jobId", async (c) => {
   const job = jobQueue.getJob(c.req.param("jobId")); if (!job) return c.json({ error: "Job not found." }, 404); if (!job.preparedImport) return c.json({ error: "Job has no prepared recipe to import." }, 400);
+  if (!jobQueue.beginImport(job.id)) return c.json({ error: "Recipe import is already running or has already completed." }, 409);
   try { const result = await importPrepared(job, emitFor(job.id)); jobQueue.complete(job.id, result.recipeUrl); return c.json({ recipeUrl: result.recipeUrl }); }
   catch (error) { const message = error instanceof Error ? error.message : String(error); await emitFor(job.id)({ step: "importing", status: "error", error: message }); return c.json({ error: message }, 500); }
+  finally { jobQueue.endImport(job.id); }
 });
 
 parseRouter.post("/api/reprompt/:jobId", async (c) => {
   const jobId = c.req.param("jobId"); const body: { customPrompt?: string } = await c.req.json<{ customPrompt?: string }>().catch(() => ({})); const customPrompt = body.customPrompt?.trim() ?? "";
   if (customPrompt.length > MAX_CUSTOM_PROMPT_CHARS) return c.json({ error: "Custom prompt is too long." }, 400);
   if (!jobQueue.reprompt(jobId, customPrompt)) return c.json({ error: "Job cannot be reprompted or another job is active." }, 409);
-  const job = jobQueue.getJob(jobId)!; process.nextTick(async () => { try { await generate(job, emitFor(jobId)); if (!jobQueue.isCancelled(jobId)) await finishAfterGeneration(job, emitFor(jobId)); } catch (error) { if (!jobQueue.isCancelled(jobId)) jobQueue.fail(jobId, error instanceof Error ? error.message : String(error)); } });
+  const job = jobQueue.getJob(jobId)!; process.nextTick(async () => { try { await generate(job, emitFor(jobId)); if (!jobQueue.isCancelled(jobId)) await finishAfterGeneration(job, emitFor(jobId)); } catch (error) { if (!jobQueue.isCancelled(jobId)) { const message = error instanceof Error ? error.message : String(error); const step = job.steps.importing.status === "loading" ? "importing" : "generation"; await emitFor(jobId)({ step, status: "error", error: message }); jobQueue.fail(jobId, message); } } });
   return c.json({ success: true, jobId });
 });

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ACCEPTED_IMAGE_TYPES,
   isExactHttpUrl,
@@ -28,6 +28,7 @@ interface Props {
   customPromptMaxLength: number;
   onSubmit: (event: React.FormEvent) => void;
   hasJobs: boolean;
+  isSubmitting: boolean;
 }
 
 function Toggle({
@@ -68,12 +69,15 @@ function Preview({
   onRemove: () => void;
   label: string;
 }) {
-  const url = useMemo(() => URL.createObjectURL(file), [file]);
-  useEffect(() => () => URL.revokeObjectURL(url), [url]);
+  const urlRef = useRef("");
+  const attachPreview = useCallback((node: HTMLImageElement | null) => {
+    if (urlRef.current) { URL.revokeObjectURL(urlRef.current); urlRef.current = ""; }
+    if (node) { const next = URL.createObjectURL(file); urlRef.current = next; node.src = next; }
+  }, [file]);
 
   return (
     <div className="relative overflow-hidden rounded-xl border-3 border-black bg-white">
-      <img src={url} alt={label} className="h-28 w-full object-cover" />
+      <img ref={attachPreview} alt={label} className="h-28 w-full object-cover" />
       <button
         type="button"
         onClick={onRemove}
@@ -107,6 +111,12 @@ export function UrlForm(props: Props) {
 
   const detectedUrl = isExactHttpUrl(props.inputText);
   const hasSource = Boolean(props.inputText.trim() || props.sourceImages.length);
+  const validationError = props.sourceImages.length
+    ? validateSourceFiles(props.sourceImages)
+    : props.inputText.length > 100_000
+      ? "Text must be 100,000 characters or fewer."
+      : "";
+  const displayedError = error || validationError;
 
   const addSourceFiles = (incoming: File[]) => {
     if (!incoming.length) return;
@@ -170,7 +180,7 @@ export function UrlForm(props: Props) {
   };
 
   const content = (
-    <div className="relative bg-pink px-5 py-5 sm:px-7 sm:py-7 lg:min-h-[540px]">
+    <div className="relative bg-pink px-4 py-4 sm:px-7 sm:py-7 lg:min-h-[540px]">
       <div className="relative z-10 max-w-3xl">
         <p className="neo-copy font-300 text-ink">
           Paste one video or recipe-page URL, paste complete recipe text, or
@@ -186,7 +196,7 @@ export function UrlForm(props: Props) {
       />
 
       <div
-        className={`smart-source-shell relative z-10 mt-5 ${dragActive ? "smart-source-shell--dragging" : ""}`}
+        className={`smart-source-shell relative z-10 mt-4 sm:mt-5 ${dragActive ? "smart-source-shell--dragging" : ""}`}
         onDragEnter={(event) => {
           event.preventDefault();
           setDragActive(true);
@@ -263,6 +273,7 @@ export function UrlForm(props: Props) {
                 className={`toolbar-cover-button ${props.customImage ? "toolbar-cover-button--selected" : ""}`}
                 onClick={() => customInput.current?.click()}
                 title={props.customImage?.name ?? "Optional custom Mealie cover"}
+                aria-label={props.customImage ? `Replace custom recipe cover ${props.customImage.name}` : "Add custom recipe cover"}
               >
                 <span className="toolbar-cover-button__content">
                   <svg
@@ -276,7 +287,7 @@ export function UrlForm(props: Props) {
                     <circle cx="8.5" cy="9" r="1.5" />
                     <path d="m4 17 4-4 3 3 4-5 5 6" />
                   </svg>
-                  <span>{props.customImage ? "Added!" : "Add cover"}</span>
+                  <span className="max-w-32 truncate">{props.customImage?.name ?? "Add cover"}</span>
                 </span>
               </button>
               {props.customImage && (
@@ -294,11 +305,13 @@ export function UrlForm(props: Props) {
           </div>
           <button
             type="submit"
-            disabled={!hasSource || Boolean(error)}
+            disabled={!hasSource || Boolean(displayedError) || props.isSubmitting}
             className="neo-btn smart-submit-button bg-sun disabled:bg-[#ddd]"
           >
             <Icon src={playIcon} className="h-4 w-4" />
-            {props.hasJobs
+            {props.isSubmitting
+              ? "Submitting..."
+              : props.hasJobs
               ? "Add to queue"
               : props.autoImport
                 ? "Import recipe"
@@ -329,24 +342,25 @@ export function UrlForm(props: Props) {
               key={`${file.name}-${file.lastModified}-${index}`}
               file={file}
               label={`source image ${index + 1}`}
-              onRemove={() =>
+              onRemove={() => {
+                setError("");
                 props.setSourceImages(
                   props.sourceImages.filter((_, item) => item !== index),
-                )
-              }
+                );
+              }}
             />
           ))}
         </div>
       )}
 
-      {error && (
+      {displayedError && (
         <p className="mt-3 font-700 text-[#7b1111]" role="alert">
-          {error}
+          {displayedError}
         </p>
       )}
 
-      <div className="relative z-10 mt-8 max-w-2xl">
-        <div className="grid gap-3 md:grid-cols-2">
+      <div className="relative z-10 mt-6 max-w-2xl sm:mt-8">
+        <div className="grid gap-2.5 sm:gap-3 md:grid-cols-2">
           <Toggle
             checked={props.useCustomPrompt}
             onChange={props.setUseCustomPrompt}
@@ -368,7 +382,7 @@ export function UrlForm(props: Props) {
       </div>
 
       {props.useCustomPrompt && (
-        <div className="mt-5 max-w-xl">
+        <div className="mt-4 max-w-xl sm:mt-5">
           <div className="flex justify-between">
             <p className="neo-overline !text-white">
               Custom parser instructions
@@ -382,7 +396,7 @@ export function UrlForm(props: Props) {
             value={props.customPrompt}
             onChange={(event) => props.setCustomPrompt(event.target.value)}
             maxLength={props.customPromptMaxLength}
-            placeholder="Prefer metric units, keep steps concise..."
+            placeholder="Prefer metric units, keep steps concise, translate to bulgarian..."
           />
         </div>
       )}
@@ -392,13 +406,13 @@ export function UrlForm(props: Props) {
 
   const submit = (event: React.FormEvent) => {
     props.onSubmit(event);
-    if (hasSource && !error) setExpanded(false);
+    if (hasSource && !displayedError) setExpanded(false);
   };
 
   if (!props.hasJobs) {
     return (
       <form
-        className="relative z-10 w-full overflow-hidden rounded-[24px] border-4 border-solid border-black shadow-neo"
+        className="relative z-10 w-full overflow-hidden rounded-[20px] border-3 border-solid border-black shadow-neo-sm sm:rounded-[24px] sm:border-4 sm:shadow-neo"
         onSubmit={submit}
       >
         {content}
@@ -407,19 +421,24 @@ export function UrlForm(props: Props) {
   }
 
   return (
-    <div className="relative z-10 w-full overflow-hidden rounded-[24px] border-4 border-solid border-black shadow-neo">
+    <div className="relative z-10 w-full overflow-hidden rounded-[20px] border-3 border-solid border-black shadow-neo-sm sm:rounded-[24px] sm:border-4 sm:shadow-neo">
       <button
         type="button"
         onClick={() => setExpanded((value) => !value)}
-        className="flex w-full items-center bg-pink px-6 py-4 text-left font-display text-xl font-800"
+        className="flex w-full items-center bg-pink px-4 py-3 text-left font-display text-lg font-800 sm:px-6 sm:py-4 sm:text-xl"
+        aria-expanded={expanded}
+        aria-controls="add-recipe-form"
       >
         Add another recipe
         <span className="ml-auto">{expanded ? "−" : "+"}</span>
       </button>
       <form
+        id="add-recipe-form"
         onSubmit={submit}
         className="grid transition-[grid-template-rows] duration-300"
         style={{ gridTemplateRows: expanded ? "1fr" : "0fr" }}
+        aria-hidden={!expanded}
+        inert={!expanded}
       >
         <div className="min-h-0 overflow-hidden">{content}</div>
       </form>

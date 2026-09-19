@@ -1,9 +1,10 @@
 import OpenAI from "openai";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { config } from "./config.js";
-import { assertModelInputLength, MAX_MODEL_INPUT_CHARS } from "./input.js";
+import { buildTextModelInput, MAX_MODEL_INPUT_CHARS } from "./input.js";
 import type { NormalizedSourceContext } from "./queue.js";
 import { assetManager } from "./assets.js";
+import { IncompleteRecipeError, isRetryableGenerationError } from "./generation-errors.js";
 
 // -------------------------------------------------------------------------
 // Mealie recipe schema types (subset used for generation)
@@ -58,12 +59,7 @@ export interface ParsedRecipe {
 // Thrown when the source does not contain a complete, usable recipe. Kept
 // separate from provider/API failures so callers do not mistake it for a
 // model-capability error.
-export class IncompleteRecipeError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "IncompleteRecipeError";
-  }
-}
+export { IncompleteRecipeError } from "./generation-errors.js";
 
 // -------------------------------------------------------------------------
 // System prompt
@@ -199,9 +195,7 @@ export async function buildModelMessages(params: {
 }): Promise<ChatCompletionMessageParam[]> {
   const system = buildSystemPrompt();
   if (params.context.kind === "text") {
-    const content = assertModelInputLength(
-      `Source type: ${params.context.sourceType}\nTitle: ${params.context.title}\nDescription: ${params.context.description || "(none)"}\nAttribution URL: ${params.context.attributionUrl || "(none)"}\nExtraction method: ${params.context.extractionMethod}\n\nSource content:\n${params.context.body}${customInstructions(params.customPrompt)}`,
-    );
+    const content = buildTextModelInput({ ...params.context, customPrompt: params.customPrompt });
     return [{ role: "system", content: system }, { role: "user", content }];
   }
   if (params.context.assets.length === 0) throw new Error("Image source assets are no longer retained.");
@@ -254,6 +248,7 @@ export async function parseRecipeSource(params: {
       const preferredSourceImageIndex = Number.isInteger(rawIndex) && Number(rawIndex) >= 0 && Number(rawIndex) < imageCount ? Number(rawIndex) : imageCount ? 0 : null;
       return { recipe, preferredSourceImageIndex };
     } catch (err) {
+      if (!isRetryableGenerationError(err)) throw err;
       lastError = err instanceof Error ? err : new Error(String(err));
       console.warn(`[llm] Attempt ${attempt}/${MAX_RETRIES} failed: ${lastError.message}`);
     }
@@ -311,9 +306,16 @@ function validateRecipe(recipe: unknown): asserts recipe is ParsedRecipe {
     throw new IncompleteRecipeError("Recipe has empty recipeInstructions array");
   }
 
-  const usableIngredients = r["recipeIngredient"].filter((item) => item && typeof item === "object" && (typeof (item as Record<string, unknown>).originalText === "string" || (item as Record<string, unknown>).food));
+  const usableIngredients = r["recipeIngredient"].filter((item) => {
+    if (!item || typeof item !== "object") return false;
+    const ingredient = item as Record<string, unknown>;
+    const originalText = typeof ingredient.originalText === "string" ? ingredient.originalText.trim() : "";
+    const food = ingredient.food && typeof ingredient.food === "object" ? ingredient.food as Record<string, unknown> : null;
+    const foodName = typeof food?.name === "string" ? food.name.trim() : "";
+    return Boolean(originalText || foodName);
+  });
   const usableInstructions = r["recipeInstructions"].filter((item) => item && typeof item === "object" && typeof (item as Record<string, unknown>).text === "string" && String((item as Record<string, unknown>).text).trim().length > 2);
-  if (!usableIngredients.length || !usableInstructions.length) throw new IncompleteRecipeError("Recipe source does not contain both usable ingredients and instructions");
+  if (usableIngredients.length !== r["recipeIngredient"].length || usableInstructions.length !== r["recipeInstructions"].length) throw new IncompleteRecipeError("Recipe source does not contain both usable ingredients and instructions");
 }
 
 export { MAX_MODEL_INPUT_CHARS };

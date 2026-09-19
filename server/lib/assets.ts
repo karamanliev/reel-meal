@@ -24,11 +24,115 @@ const EXTENSIONS: Record<SupportedImageType, string> = {
 };
 
 function sniffImage(buffer: Buffer): SupportedImageType | null {
-  if (buffer.length >= 4 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer.at(-2) === 0xff && buffer.at(-1) === 0xd9) return "image/jpeg";
-  if (buffer.length >= 24 && buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) && buffer.subarray(12, 16).toString() === "IHDR") return "image/png";
+  if (buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xd8) return "image/jpeg";
+  if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return "image/png";
   if (buffer.length >= 12 && buffer.subarray(0, 4).toString() === "RIFF" && buffer.subarray(8, 12).toString() === "WEBP") return "image/webp";
-  if (buffer.length >= 10 && ["GIF87a", "GIF89a"].includes(buffer.subarray(0, 6).toString())) return "image/gif";
+  if (buffer.length >= 6 && ["GIF87a", "GIF89a"].includes(buffer.subarray(0, 6).toString())) return "image/gif";
   return null;
+}
+
+function crc32(buffer: Buffer): number {
+  let crc = 0xffffffff;
+  for (const byte of buffer) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function validPng(buffer: Buffer): boolean {
+  let offset = 8; let sawHeader = false; let sawData = false;
+  while (offset + 12 <= buffer.length) {
+    const length = buffer.readUInt32BE(offset); const type = buffer.subarray(offset + 4, offset + 8).toString("ascii");
+    const dataEnd = offset + 8 + length; const chunkEnd = dataEnd + 4;
+    if (chunkEnd > buffer.length) return false;
+    if (buffer.readUInt32BE(dataEnd) !== crc32(buffer.subarray(offset + 4, dataEnd))) return false;
+    if (!sawHeader) {
+      if (type !== "IHDR" || length !== 13 || buffer.readUInt32BE(offset + 8) === 0 || buffer.readUInt32BE(offset + 12) === 0) return false;
+      sawHeader = true;
+    }
+    if (type === "IDAT") sawData = true;
+    if (type === "IEND") return length === 0 && sawData && chunkEnd === buffer.length;
+    offset = chunkEnd;
+  }
+  return false;
+}
+
+function validJpeg(buffer: Buffer): boolean {
+  if (buffer.length < 10 || buffer.at(-2) !== 0xff || buffer.at(-1) !== 0xd9) return false;
+  let offset = 2; let sawFrame = false;
+  while (offset < buffer.length - 2) {
+    if (buffer[offset] !== 0xff) return false;
+    while (buffer[offset] === 0xff) offset++;
+    const marker = buffer[offset++];
+    if (marker === 0xd9) return sawFrame;
+    if (marker === 0xda) return sawFrame;
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+    if (offset + 2 > buffer.length) return false;
+    const length = buffer.readUInt16BE(offset);
+    if (length < 2 || offset + length > buffer.length) return false;
+    const isFrame = (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker));
+    if (isFrame) {
+      if (length < 7 || buffer.readUInt16BE(offset + 3) === 0 || buffer.readUInt16BE(offset + 5) === 0) return false;
+      sawFrame = true;
+    }
+    offset += length;
+  }
+  return false;
+}
+
+function consumeGifBlocks(buffer: Buffer, start: number): number {
+  let offset = start;
+  while (offset < buffer.length) {
+    const length = buffer[offset++];
+    if (length === 0) return offset;
+    if (offset + length > buffer.length) return -1;
+    offset += length;
+  }
+  return -1;
+}
+
+function validGif(buffer: Buffer): boolean {
+  if (buffer.length < 14 || buffer.readUInt16LE(6) === 0 || buffer.readUInt16LE(8) === 0) return false;
+  let offset = 13; let sawImage = false;
+  if (buffer[10] & 0x80) offset += 3 * (2 ** ((buffer[10] & 0x07) + 1));
+  while (offset < buffer.length) {
+    const block = buffer[offset++];
+    if (block === 0x3b) return sawImage && offset === buffer.length;
+    if (block === 0x21) {
+      if (offset >= buffer.length) return false;
+      offset = consumeGifBlocks(buffer, offset + 1);
+    } else if (block === 0x2c) {
+      if (offset + 9 > buffer.length || buffer.readUInt16LE(offset + 4) === 0 || buffer.readUInt16LE(offset + 6) === 0) return false;
+      const packed = buffer[offset + 8]; offset += 9;
+      if (packed & 0x80) offset += 3 * (2 ** ((packed & 0x07) + 1));
+      if (offset >= buffer.length) return false;
+      offset = consumeGifBlocks(buffer, offset + 1); sawImage = true;
+    } else return false;
+    if (offset < 0 || offset > buffer.length) return false;
+  }
+  return false;
+}
+
+function validWebp(buffer: Buffer): boolean {
+  if (buffer.length < 20 || buffer.readUInt32LE(4) + 8 !== buffer.length) return false;
+  let offset = 12; let sawImage = false;
+  while (offset + 8 <= buffer.length) {
+    const type = buffer.subarray(offset, offset + 4).toString("ascii"); const length = buffer.readUInt32LE(offset + 4);
+    const end = offset + 8 + length;
+    if (end > buffer.length) return false;
+    if (type === "VP8 " || type === "VP8L") sawImage = length >= 5;
+    if (type === "ANMF") sawImage = length >= 16;
+    offset = end + (length % 2);
+  }
+  return sawImage && offset === buffer.length;
+}
+
+function hasValidImageStructure(buffer: Buffer, type: SupportedImageType): boolean {
+  if (type === "image/png") return validPng(buffer);
+  if (type === "image/jpeg") return validJpeg(buffer);
+  if (type === "image/gif") return validGif(buffer);
+  return validWebp(buffer);
 }
 
 export function normalizeFileName(name: string): string {
@@ -46,6 +150,7 @@ export function validateImageBuffer(params: { buffer: Buffer; declaredType: stri
   const detected = sniffImage(buffer);
   if (!detected) throw new Error(`${fileName} is corrupt or does not have a supported image signature.`);
   if (detected !== declaredType) throw new Error(`${fileName} MIME type does not match its file signature.`);
+  if (!hasValidImageStructure(buffer, detected)) throw new Error(`${fileName} is corrupt or incomplete.`);
   return detected;
 }
 

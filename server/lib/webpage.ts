@@ -53,7 +53,7 @@ export function extractWebpageDocument(html: string, pageUrl: string): WebpageEx
   const ranked = candidates
     .map((recipe, index) => ({ recipe, index, score: (text(recipe.name) === pageTitle ? 6 : 0) + (text(recipe.recipeIngredient).length ? 4 : 0) + (text(recipe.recipeInstructions).length ? 4 : 0) + (recipe.mainEntityOfPage ? 2 : 0) }))
     .sort((a, b) => b.score - a.score || a.index - b.index);
-  const selected = ranked[0]?.recipe;
+  const selected = ranked.find(({ recipe }) => text(recipe.recipeIngredient) && text(recipe.recipeInstructions))?.recipe;
   if (selected) {
     const ingredients = text(selected.recipeIngredient);
     const instructions = text(selected.recipeInstructions);

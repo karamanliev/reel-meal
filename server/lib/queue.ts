@@ -86,6 +86,7 @@ export class JobQueue extends EventEmitter {
   private processCallback: ProcessCallback | null = null;
   private cleanupCallback: CleanupCallback | null = null;
   private expiryTimers = new Map<string, NodeJS.Timeout>();
+  private importingIds = new Set<string>();
 
   constructor(private readonly retentionMs = RETENTION_MS) { super(); }
 
@@ -95,7 +96,7 @@ export class JobQueue extends EventEmitter {
   add(params: JobParams): Job {
     if (this.jobs.has(params.id)) throw new Error("A job with this identifier already exists.");
     const job: Job = { ...params, status: "queued", addedAt: Date.now(), steps: defaultSteps(), resolvedSourceType: null,
-      recipeTitle: null, thumbnailUrl: params.sourceAssets[0]?.previewUrl ?? params.customImage?.previewUrl ?? null,
+      recipeTitle: null, thumbnailUrl: params.customImage?.previewUrl ?? params.sourceAssets[0]?.previewUrl ?? null,
       recipeUrl: null, errorMessage: null, warnings: [], sourceDetails: null, extractedContentDetails: null,
       parsingDetails: null, normalizedContext: null, preparedImport: null,
       finalImage: { customAssetId: params.customImage?.id, warnings: [] }, position: 0, totalInQueue: 0 };
@@ -105,7 +106,7 @@ export class JobQueue extends EventEmitter {
   }
 
   cancel(jobId: string): boolean {
-    const job = this.jobs.get(jobId); if (!job || job.status === "done" || job.status === "error") return false;
+    const job = this.jobs.get(jobId); if (!job || job.status === "done" || job.status === "error" || this.importingIds.has(jobId)) return false;
     this.queue = this.queue.filter((id) => id !== jobId); const active = this.activeJobId === jobId;
     job.status = "cancelled"; job.errorMessage = "Job cancelled."; this.cancelledIds.add(jobId);
     if (active) { this.activeJobId = null; this.activateNext(); } else this.updatePositions();
@@ -113,15 +114,15 @@ export class JobQueue extends EventEmitter {
   }
 
   remove(jobId: string): boolean {
-    const job = this.jobs.get(jobId); if (!job || job.status === "active") return false;
+    const job = this.jobs.get(jobId); if (!job || job.status === "active" || this.importingIds.has(jobId)) return false;
     this.queue = this.queue.filter((id) => id !== jobId); this.jobs.delete(jobId); this.cancelledIds.delete(jobId);
     this.clearExpiry(jobId); this.cleanup(jobId); this.updatePositions(); this.emit("job:removed", jobId); return true;
   }
 
-  complete(jobId: string, recipeUrl: string): void { const job = this.jobs.get(jobId); if (job) { job.status = "done"; job.recipeUrl = recipeUrl; } this.finish(jobId); this.emit("job:done", { jobId, recipeUrl }); }
+  complete(jobId: string, recipeUrl: string): void { const job = this.jobs.get(jobId); if (!job || job.status === "cancelled") return; job.status = "done"; job.recipeUrl = recipeUrl; this.finish(jobId); this.emit("job:done", { jobId, recipeUrl }); }
   review(jobId: string): void { const job = this.jobs.get(jobId); if (job) job.status = "done"; this.finish(jobId); this.emit("job:review", jobId); }
   fail(jobId: string, error: string): void { const job = this.jobs.get(jobId); if (job) { job.status = "error"; job.errorMessage = error; } this.finish(jobId); this.emit("job:error", { jobId, error }); }
-  private finish(jobId: string): void { if (this.activeJobId === jobId) this.activeJobId = null; this.cancelledIds.delete(jobId); const job = this.jobs.get(jobId); if (job && (job.sourceAssets.length || job.customImage)) this.scheduleExpiry(jobId); this.activateNext(); }
+  private finish(jobId: string): void { const wasActive = this.activeJobId === jobId; if (wasActive) this.activeJobId = null; this.cancelledIds.delete(jobId); const job = this.jobs.get(jobId); if (job && this.hasAssets(job)) this.scheduleExpiry(jobId); if (wasActive) this.activateNext(); }
 
   isActive(jobId: string): boolean { return this.activeJobId === jobId }
   isCancelled(jobId: string): boolean { return this.cancelledIds.has(jobId) }
@@ -131,9 +132,19 @@ export class JobQueue extends EventEmitter {
   updateStep(jobId: string, step: StepName, patch: Partial<StepState>): void { const job = this.jobs.get(jobId); if (job) job.steps[step] = { ...job.steps[step], ...patch }; }
   updateJob(jobId: string, patch: Partial<Job>): void { const job = this.jobs.get(jobId); if (job) Object.assign(job, patch); }
   touch(jobId: string): void { this.clearExpiry(jobId) }
+  beginImport(jobId: string): boolean {
+    const job = this.jobs.get(jobId);
+    if (!job?.preparedImport || job.recipeUrl || job.status === "cancelled" || this.importingIds.has(jobId)) return false;
+    this.touch(jobId); this.importingIds.add(jobId); return true;
+  }
+  endImport(jobId: string): void {
+    this.importingIds.delete(jobId);
+    const job = this.jobs.get(jobId);
+    if (job && ["done", "error"].includes(job.status) && this.hasAssets(job)) this.scheduleExpiry(jobId);
+  }
 
   reprompt(jobId: string, customPrompt: string): boolean {
-    const job = this.jobs.get(jobId); if (!job?.normalizedContext || !["done", "error"].includes(job.status) || this.activeJobId) return false;
+    const job = this.jobs.get(jobId); if (!job?.normalizedContext || job.recipeUrl || this.importingIds.has(jobId) || !["done", "error"].includes(job.status) || this.activeJobId) return false;
     this.touch(jobId); job.customPrompt = customPrompt; job.status = "active"; job.parsingDetails = null; job.preparedImport = null;
     job.recipeUrl = null; job.errorMessage = null; job.steps.generation = { status: "loading", message: "Re-generating recipe with AI..." };
     job.steps.importing = { status: "idle", message: "" }; this.activeJobId = jobId; this.cancelledIds.delete(jobId);
@@ -154,6 +165,7 @@ export class JobQueue extends EventEmitter {
     this.activeJobId = null;
   }
   private updatePositions(): void { const ids = this.queue.filter((id) => this.jobs.has(id) && !this.cancelledIds.has(id)); ids.forEach((id, index) => { const job = this.jobs.get(id)!; const position = index + 1; if (job.position !== position || job.totalInQueue !== ids.length) { job.position = position; job.totalInQueue = ids.length; this.emit("job:position", { jobId: id, position, totalInQueue: ids.length }); } }); }
+  private hasAssets(job: Job): boolean { return Boolean(job.sourceAssets.length || job.customImage || job.finalImage.remoteAssetId || job.finalImage.sourceAssetId || job.finalImage.customAssetId) }
   private scheduleExpiry(jobId: string): void { this.clearExpiry(jobId); const timer = setTimeout(() => this.remove(jobId), this.retentionMs); timer.unref(); this.expiryTimers.set(jobId, timer); }
   private clearExpiry(jobId: string): void { const timer = this.expiryTimers.get(jobId); if (timer) clearTimeout(timer); this.expiryTimers.delete(jobId); }
   private cleanup(jobId: string): void { Promise.resolve(this.cleanupCallback?.(jobId)).catch((error) => console.warn(`[queue] Asset cleanup failed for ${jobId}: ${error}`)); }

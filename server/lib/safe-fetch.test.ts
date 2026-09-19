@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { isUnsafeIp, safeFetchBuffer, validatePublicUrl } from "./safe-fetch.js";
 
 test("rejects private, link-local, credentialed, and IPv6 local URLs", async () => {
-  for (const address of ["127.0.0.1", "10.0.0.1", "192.168.1.1", "169.254.1.1", "::1", "fd00::1", "fe80::1"]) assert.equal(isUnsafeIp(address), true);
+  for (const address of ["127.0.0.1", "10.0.0.1", "192.168.1.1", "169.254.1.1", "::1", "fd00::1", "fe80::1", "::ffff:7f00:1"]) assert.equal(isUnsafeIp(address), true);
   await assert.rejects(() => validatePublicUrl("http://user:pass@example.com", async () => ["93.184.216.34"]), /credentials/);
   await assert.rejects(() => validatePublicUrl("http://private.test", async () => ["10.0.0.2"]), /restricted/);
 });
@@ -16,4 +16,13 @@ test("revalidates redirect destinations and validates content type", async () =>
 
 test("rejects oversized streamed bodies", async () => {
   await assert.rejects(() => safeFetchBuffer("https://public.test", { maxBytes: 3, fetchImpl: (async () => new Response("1234")) as typeof fetch, resolveHost: async () => ["93.184.216.34"] }), /exceeds/);
+});
+
+test("keeps the timeout active while reading the response body", async () => {
+  const stalledFetch = async (_input: URL | RequestInfo, init?: RequestInit) => new Response(new ReadableStream({
+    start(controller) {
+      init?.signal?.addEventListener("abort", () => controller.error(new DOMException("Aborted", "AbortError")), { once: true });
+    },
+  }));
+  await assert.rejects(() => safeFetchBuffer("https://public.test", { maxBytes: 10, timeoutMs: 5, fetchImpl: stalledFetch as typeof fetch, resolveHost: async () => ["93.184.216.34"] }), /timed out/);
 });

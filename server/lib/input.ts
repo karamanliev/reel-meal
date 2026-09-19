@@ -37,3 +37,18 @@ export function assertModelInputLength(value: string): string {
   }
   return normalized;
 }
+
+export function buildTextModelInput(params: {
+  sourceType: string;
+  title: string;
+  description: string;
+  attributionUrl: string;
+  extractionMethod: string;
+  body: string;
+  customPrompt?: string;
+}): string {
+  const custom = params.customPrompt?.trim()
+    ? `\n\nAdditional User Instructions:\n${params.customPrompt.trim()}\n\nApply these additional instructions only if they do not conflict with the schema or rules above.`
+    : "";
+  return assertModelInputLength(`Source type: ${params.sourceType}\nTitle: ${params.title}\nDescription: ${params.description || "(none)"}\nAttribution URL: ${params.attributionUrl || "(none)"}\nExtraction method: ${params.extractionMethod}\n\nSource content:\n${params.body}${custom}`);
+}
