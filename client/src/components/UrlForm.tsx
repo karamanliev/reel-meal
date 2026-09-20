@@ -33,6 +33,12 @@ interface Props {
   isSubmitting: boolean;
 }
 
+interface CoverUrlValidation {
+  url: string;
+  status: "checking" | "valid" | "invalid";
+  error?: string;
+}
+
 function Toggle({
   checked,
   onChange,
@@ -98,6 +104,7 @@ export function UrlForm(props: Props) {
   const [error, setError] = useState("");
   const [dragActive, setDragActive] = useState(false);
   const [coverDragActive, setCoverDragActive] = useState(false);
+  const [coverUrlValidation, setCoverUrlValidation] = useState<CoverUrlValidation | null>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const sourceInput = useRef<HTMLInputElement>(null);
   const customInput = useRef<HTMLInputElement>(null);
@@ -112,6 +119,31 @@ export function UrlForm(props: Props) {
     }
   }, [props.hasJobs, expanded]);
 
+  const trimmedCoverUrl = props.customImageUrl.trim();
+  const coverUrlHasValidSyntax = isExactHttpUrl(trimmedCoverUrl);
+
+  useEffect(() => {
+    if (!props.useCustomImage || props.customImage || !coverUrlHasValidSyntax) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      setCoverUrlValidation({ url: trimmedCoverUrl, status: "checking" });
+      void fetch("/api/image-url/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: trimmedCoverUrl }),
+        signal: controller.signal,
+      }).then(async (response) => {
+        const result = await response.json().catch(() => ({})) as { valid?: boolean; error?: string };
+        if (response.ok && result.valid) setCoverUrlValidation({ url: trimmedCoverUrl, status: "valid" });
+        else setCoverUrlValidation({ url: trimmedCoverUrl, status: "invalid", error: result.error || "This URL is not a supported image." });
+      }).catch((requestError: unknown) => {
+        if (requestError instanceof Error && requestError.name === "AbortError") return;
+        setCoverUrlValidation({ url: trimmedCoverUrl, status: "invalid", error: "Image URL could not be checked." });
+      });
+    }, 400);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [coverUrlHasValidSyntax, props.customImage, props.useCustomImage, trimmedCoverUrl]);
+
   const detectedUrl = isExactHttpUrl(props.inputText);
   const hasSource = Boolean(props.inputText.trim() || props.sourceImages.length);
   const validationError = props.sourceImages.length
@@ -119,10 +151,17 @@ export function UrlForm(props: Props) {
     : props.inputText.length > 100_000
       ? "Text must be 100,000 characters or fewer."
       : "";
-  const coverUrlError = props.useCustomImage && props.customImageUrl.trim() && !isExactHttpUrl(props.customImageUrl)
-    ? "Custom cover URL must be one complete HTTP or HTTPS URL."
-    : "";
-  const displayedError = error || validationError || coverUrlError;
+  const activeCoverUrlValidation = coverUrlValidation?.url === trimmedCoverUrl ? coverUrlValidation : null;
+  const coverUrlIsValid = Boolean(props.useCustomImage && trimmedCoverUrl && coverUrlHasValidSyntax && activeCoverUrlValidation?.status === "valid");
+  const coverUrlIsChecking = Boolean(props.useCustomImage && trimmedCoverUrl && coverUrlHasValidSyntax && activeCoverUrlValidation?.status !== "valid" && activeCoverUrlValidation?.status !== "invalid");
+  const coverUrlError = props.useCustomImage && trimmedCoverUrl && !coverUrlHasValidSyntax
+    ? "Custom cover must be one complete HTTP or HTTPS image URL."
+    : props.useCustomImage && activeCoverUrlValidation?.status === "invalid"
+      ? activeCoverUrlValidation.error || "This URL is not a supported image."
+      : "";
+  const displayedError = error || validationError;
+  const hasValidationError = Boolean(displayedError || coverUrlError);
+  const hasDetectedCustomImage = Boolean(props.customImage) || coverUrlIsValid;
 
   const addSourceFiles = (incoming: File[]) => {
     if (!incoming.length) return;
@@ -175,12 +214,14 @@ export function UrlForm(props: Props) {
       );
       return;
     }
+    setCoverUrlValidation(null);
     props.setCustomImage(file);
     if (file) props.setCustomImageUrl("");
     setError("");
   };
 
   const removeCustomImage = () => {
+    setCoverUrlValidation(null);
     props.setCustomImage(null);
     props.setCustomImageUrl("");
   };
@@ -264,7 +305,7 @@ export function UrlForm(props: Props) {
           </div>
           <button
             type="submit"
-            disabled={!hasSource || Boolean(displayedError) || props.isSubmitting}
+             disabled={!hasSource || hasValidationError || coverUrlIsChecking || props.isSubmitting}
             className="neo-btn smart-submit-button bg-sun disabled:bg-[#ddd]"
           >
             <Icon src={playIcon} className="h-4 w-4" />
@@ -345,79 +386,8 @@ export function UrlForm(props: Props) {
         </div>
       </div>
 
-      {props.useCustomImage && (
-        <div className="relative z-10 mt-4 max-w-xl sm:mt-5">
-          <p className="neo-overline mb-2 !text-ink">Custom recipe cover</p>
-          <div
-            className={`smart-source-shell cover-source-shell ${coverDragActive ? "smart-source-shell--dragging" : ""}`}
-            onDragEnter={(event) => { event.preventDefault(); setCoverDragActive(true); }}
-            onDragOver={(event) => { event.preventDefault(); setCoverDragActive(true); }}
-            onDragLeave={(event) => {
-              if (!event.currentTarget.contains(event.relatedTarget as Node)) setCoverDragActive(false);
-            }}
-            onDrop={(event) => {
-              event.preventDefault();
-              setCoverDragActive(false);
-              const image = [...event.dataTransfer.files].find((file) => file.type.startsWith("image/"));
-              if (image) chooseCustom(image);
-              else setError("Drop a JPEG, PNG, WebP, or GIF custom cover.");
-            }}
-          >
-            <input
-              className="cover-source-input"
-              value={props.customImage ? props.customImage.name : props.customImageUrl}
-              onChange={(event) => {
-                if (props.customImage) props.setCustomImage(null);
-                props.setCustomImageUrl(event.target.value);
-                setError("");
-              }}
-              onPaste={(event) => {
-                const image = [...event.clipboardData.files].find((file) => file.type.startsWith("image/"));
-                if (image) { event.preventDefault(); chooseCustom(image); }
-              }}
-              placeholder="Paste an image URL or image..."
-              aria-label="Custom cover URL or pasted image"
-            />
-            <div className="smart-source-toolbar cover-source-toolbar">
-              <button
-                type="button"
-                className="neo-btn-secondary smart-source-picker"
-                onClick={() => customInput.current?.click()}
-              >
-                <span className="smart-source-picker__content">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4" aria-hidden="true">
-                    <rect x="3" y="4" width="18" height="16" rx="2" />
-                    <circle cx="8.5" cy="9" r="1.5" />
-                    <path d="m4 17 4-4 3 3 4-5 5 6" />
-                  </svg>
-                  <span>{props.customImage ? "Replace cover" : "Add cover"}</span>
-                </span>
-              </button>
-              {(props.customImage || props.customImageUrl) && (
-                <button type="button" className="cover-source-remove" onClick={removeCustomImage}>
-                  Clear cover
-                </button>
-              )}
-            </div>
-          </div>
-          <input
-            ref={customInput}
-            type="file"
-            className="sr-only"
-            accept="image/jpeg,image/png,image/webp,image/gif"
-            onChange={(event) => {
-              chooseCustom(event.target.files?.[0] ?? null);
-              event.target.value = "";
-            }}
-          />
-          <p className="mt-2 text-xs font-600 italic text-ink/50">
-            Drop or paste one image, enter its direct URL, or use Add cover. Maximum 10 MB.
-          </p>
-        </div>
-      )}
-
       {props.useCustomPrompt && (
-        <div className="mt-4 max-w-xl sm:mt-5">
+        <div className="relative z-10 mt-4 max-w-xl sm:mt-5">
           <div className="flex justify-between">
             <p className="neo-overline !text-white">
               Custom parser instructions
@@ -436,12 +406,93 @@ export function UrlForm(props: Props) {
         </div>
       )}
 
+      {props.useCustomImage && (
+        <div className="relative z-10 mt-4 max-w-xl sm:mt-5">
+          <p className="neo-overline !text-white">Custom recipe cover</p>
+          <div
+            className={`smart-source-shell cover-source-shell mt-2 ${coverDragActive ? "smart-source-shell--dragging" : ""}`}
+            onDragEnter={(event) => { event.preventDefault(); setCoverDragActive(true); }}
+            onDragOver={(event) => { event.preventDefault(); setCoverDragActive(true); }}
+            onDragLeave={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node)) setCoverDragActive(false);
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              setCoverDragActive(false);
+              const image = [...event.dataTransfer.files].find((file) => file.type.startsWith("image/"));
+              if (image) chooseCustom(image);
+              else setError("Drop a JPEG, PNG, WebP, or GIF custom cover.");
+            }}
+          >
+            <div className="cover-source-input-row">
+              <input
+                className="cover-source-input"
+                value={props.customImage ? props.customImage.name : props.customImageUrl}
+                disabled={hasDetectedCustomImage}
+                onChange={(event) => {
+                  setCoverUrlValidation(null);
+                  if (props.customImage) props.setCustomImage(null);
+                  props.setCustomImageUrl(event.target.value);
+                  setError("");
+                }}
+                onPaste={(event) => {
+                  const image = [...event.clipboardData.files].find((file) => file.type.startsWith("image/"));
+                  if (image) { event.preventDefault(); chooseCustom(image); }
+                }}
+                placeholder="Paste a direct image URL..."
+                aria-label="Custom cover URL or pasted image"
+              />
+              {hasDetectedCustomImage && (
+                <button type="button" className="cover-source-remove" onClick={removeCustomImage}>
+                  Clear
+                </button>
+              )}
+            </div>
+            <div className="cover-source-file-option">
+              <span className="cover-source-file-label">or</span>
+              <button
+                type="button"
+                className="neo-btn-secondary cover-source-file-picker"
+                onClick={() => customInput.current?.click()}
+              >
+                <span className="smart-source-picker__content">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4" aria-hidden="true">
+                    <path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M5 14v5h14v-5" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  <span>Browse files</span>
+                </span>
+              </button>
+              <span className="cover-source-file-label">from your device</span>
+            </div>
+          </div>
+          <p className="cover-source-hint">
+            {coverUrlIsChecking ? "Checking image URL..." : "Paste a direct URL above, or drop or paste one image. JPEG, PNG, WebP, or GIF; maximum 10 MB."}
+          </p>
+          <input
+            ref={customInput}
+            type="file"
+            className="sr-only"
+            accept="image/jpeg,image/png,image/webp,image/gif"
+            onChange={(event) => {
+              chooseCustom(event.target.files?.[0] ?? null);
+              event.target.value = "";
+            }}
+          />
+          {coverUrlError && (
+            <p className="mt-2 font-700 text-[#7b1111]" role="alert">
+              {coverUrlError}
+            </p>
+          )}
+        </div>
+      )}
+
     </div>
   );
 
   const submit = (event: React.FormEvent) => {
     props.onSubmit(event);
-    if (hasSource && !displayedError) setExpanded(false);
+    if (hasSource && !hasValidationError && !coverUrlIsChecking) setExpanded(false);
   };
 
   if (!props.hasJobs) {

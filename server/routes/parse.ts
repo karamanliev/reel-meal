@@ -7,10 +7,10 @@ import { transcribeAudio } from "../lib/transcribe.js";
 import { parseRecipeSource, IncompleteRecipeError } from "../lib/llm.js";
 import { importRecipe, prepareRecipeImport } from "../lib/mealie.js";
 import { estimateRecipeNutrition } from "../lib/nutrition.js";
-import { assetManager, type ManagedAsset } from "../lib/assets.js";
+import { assetManager, validateImageBuffer, type ManagedAsset } from "../lib/assets.js";
 import { extractRecipeWebpage } from "../lib/webpage.js";
 import { safeFetchBuffer, validatePublicUrl } from "../lib/safe-fetch.js";
-import { assertModelInputLength, buildTextModelInput, isExactHttpUrl, MAX_CUSTOM_PROMPT_CHARS, MAX_MULTIPART_BYTES, type SubmittedSource } from "../lib/input.js";
+import { assertModelInputLength, buildTextModelInput, isExactHttpUrl, MAX_CUSTOM_PROMPT_CHARS, MAX_IMAGE_BYTES, MAX_MULTIPART_BYTES, type SubmittedSource } from "../lib/input.js";
 import { jobQueue, type Job, type StepName, type StepState, type SourceDetails, type ExtractedContentDetails } from "../lib/queue.js";
 
 type SSEEvent = { step: StepName; status: StepState["status"]; message?: string; data?: Record<string, unknown>; error?: string };
@@ -189,6 +189,19 @@ function bool(value: string, defaultValue: boolean): boolean { if (!value) retur
 function safeJobId(value: string): string { const id = value || crypto.randomUUID(); if (!/^[a-zA-Z0-9_-]{8,128}$/.test(id)) throw new Error("Invalid job identifier."); return id; }
 
 export const parseRouter = new Hono();
+parseRouter.post("/api/image-url/validate", bodyLimit({ maxSize: 2048, onError: (c) => c.json({ error: "Image URL request is too large." }, 413) }), async (c) => {
+  try {
+    if (!(c.req.header("content-type") ?? "").includes("application/json")) return c.json({ error: "Use JSON." }, 415);
+    const raw = await c.req.json<Record<string, unknown>>();
+    const url = typeof raw.url === "string" ? raw.url.trim() : "";
+    if (!isExactHttpUrl(url)) return c.json({ error: "Enter one complete HTTP or HTTPS image URL." }, 400);
+    const response = await safeFetchBuffer(url, { maxBytes: MAX_IMAGE_BYTES, timeoutMs: 10_000, contentTypes: ["image/jpeg", "image/png", "image/webp", "image/gif"] });
+    validateImageBuffer({ buffer: response.buffer, declaredType: response.contentType.split(";")[0].trim(), fileName: "remote-cover" });
+    return c.json({ valid: true });
+  } catch {
+    return c.json({ error: "This URL does not point directly to a supported JPEG, PNG, WebP, or GIF image." }, 422);
+  }
+});
 parseRouter.get("/api/assets/:jobId/:assetId", async (c) => {
   try { const job = jobQueue.getJob(c.req.param("jobId")); if (!job) return c.json({ error: "Job not found." }, 404); const asset = await assetManager.resolve(job.id, c.req.param("assetId")); c.header("Content-Type", asset.contentType); c.header("X-Content-Type-Options", "nosniff"); c.header("Cache-Control", "private, no-store"); return c.body(await readFile(asset.path)); }
   catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 404); }

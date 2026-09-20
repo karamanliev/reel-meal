@@ -359,35 +359,96 @@ textarea.neo-textarea.smart-source-textarea:focus {
   font-size: 1rem;
 }
 
+.cover-source-input-row {
+  display: flex;
+  align-items: center;
+  background: #fff;
+}
+
 .cover-source-input {
-  width: 100%;
+  min-width: 0;
+  flex: 1;
   min-height: 3.625rem;
   border: 0;
   background: #fff;
   padding: 0.9rem 1rem;
+  overflow: hidden;
   color: #171717;
   font: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   outline: none;
 }
 
-.cover-source-toolbar {
-  justify-content: flex-start;
+.cover-source-input:disabled {
+  background: #fff;
+  color: #929292;
+  cursor: not-allowed;
+}
+
+.cover-source-input-row .cover-source-remove {
+  flex: none;
+  margin-right: 0.75rem;
+}
+
+.cover-source-file-option {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  border-top: 3px solid #171717;
+  background: #fffaf2;
+  padding: 0.55rem 0.75rem;
+}
+
+.cover-source-hint {
+  margin: 0.55rem 0 0;
+  color: rgb(23 23 23 / 50%);
+  font-size: 0.72rem;
+  font-style: italic;
+  font-weight: 600;
+}
+
+.cover-source-file-label {
+  color: rgb(23 23 23 / 55%);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.cover-source-file-picker {
+  min-height: 2.1rem;
+  border-width: 2px;
+  border-radius: 7px;
+  padding: 0.35rem 0.6rem;
+  box-shadow: 2px 2px 0 #171717;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.cover-source-file-picker .smart-source-picker__content {
+  gap: 0.375rem;
+  transform: translateY(2px);
 }
 
 .cover-source-remove {
-  border: 0;
+  border: 2px solid rgb(141 30 30 / 40%);
+  border-radius: 6px;
   background: transparent;
-  color: #8d1e1e;
+  padding: 0.125rem 0.375rem;
+  color: rgb(141 30 30 / 70%);
   font: inherit;
-  font-size: 0.82rem;
+  font-size: 0.65rem;
   font-weight: 700;
-  text-decoration: underline;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  transition: border-color 150ms, color 150ms;
   cursor: pointer;
 }
 
 .cover-source-remove:hover,
 .cover-source-remove:focus-visible {
-  color: #5f0808;
+  border-color: #8d1e1e;
+  color: #8d1e1e;
 }
 
 @media (max-width: 520px) {

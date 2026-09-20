@@ -63,12 +63,24 @@ export async function validatePublicUrl(value: string, resolveHost?: (hostname: 
   return (await resolvePublicUrl(value, resolveHost)).url;
 }
 
+type PinnedLookupCallback = (
+  error: NodeJS.ErrnoException | null,
+  result: string | Array<{ address: string; family: 4 | 6 }>,
+  family?: 4 | 6,
+) => void;
+
+export function createPinnedLookup(address: string, family: 4 | 6) {
+  return (_hostname: string, options: unknown, callback: PinnedLookupCallback): void => {
+    const wantsAll = typeof options === "object" && options !== null && "all" in options && Boolean((options as { all?: boolean }).all);
+    if (wantsAll) callback(null, [{ address, family }]);
+    else callback(null, address, family);
+  };
+}
+
 function createPinnedAgent(address: string, family: 4 | 6): Agent {
   return new Agent({
     connect: {
-      lookup: ((_hostname: string, _options: unknown, callback: (error: NodeJS.ErrnoException | null, address: string, family: number) => void) => {
-        callback(null, address, family);
-      }) as never,
+      lookup: createPinnedLookup(address, family) as never,
     },
   });
 }

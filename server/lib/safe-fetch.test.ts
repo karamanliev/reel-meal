@@ -1,6 +1,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isUnsafeIp, safeFetchBuffer, validatePublicUrl } from "./safe-fetch.js";
+import { createPinnedLookup, isUnsafeIp, safeFetchBuffer, validatePublicUrl } from "./safe-fetch.js";
+
+test("pinned DNS lookup supports single-address and all-address callbacks", () => {
+  const lookup = createPinnedLookup("93.184.216.34", 4);
+  lookup("public.test", {}, (error, result, family) => {
+    assert.equal(error, null);
+    assert.equal(result, "93.184.216.34");
+    assert.equal(family, 4);
+  });
+  lookup("public.test", { all: true }, (error, result) => {
+    assert.equal(error, null);
+    assert.deepEqual(result, [{ address: "93.184.216.34", family: 4 }]);
+  });
+});
 
 test("rejects private, link-local, credentialed, and IPv6 local URLs", async () => {
   for (const address of ["127.0.0.1", "10.0.0.1", "192.168.1.1", "169.254.1.1", "::1", "fd00::1", "fe80::1", "::ffff:7f00:1"]) assert.equal(isUnsafeIp(address), true);
