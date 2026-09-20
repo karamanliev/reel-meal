@@ -348,7 +348,7 @@ export async function downloadVideoThumbnail(videoUrl: string, run: YtdlpRunner 
       "--skip-download",
       "--write-thumbnail",
       "--no-playlist",
-      "--output", `thumbnail:${join(workDir, "thumbnail.%(ext)s")}`,
+      "--output", join(workDir, "thumbnail.%(ext)s"),
       videoUrl,
     ]);
 

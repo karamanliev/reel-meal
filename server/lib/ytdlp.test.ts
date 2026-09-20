@@ -10,7 +10,8 @@ test("yt-dlp thumbnail fallback writes related files without downloading video",
   const thumbnail = await downloadVideoThumbnail("https://video.example/watch/123", async (args) => {
     receivedArgs = args;
     const outputIndex = args.indexOf("--output");
-    const template = args[outputIndex + 1]!.replace(/^thumbnail:/, "");
+    const template = args[outputIndex + 1]!;
+    assert.equal(template.startsWith("thumbnail:"), false);
     await writeFile(template.replace("%(ext)s", "png"), png);
     return { stdout: "", stderr: "" };
   });
